@@ -4,9 +4,11 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.4.0, shared battles.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.5.0, joining from the main menu.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
 
 ## What it does
+
+- **Multiplayer button (main menu):** enter the host's relay address and your name, press Connect. The host's game (connected and on the world map) answers with its map seed; the new campaign screen opens with that seed filled in. Pick your origin and settings, and when the campaign starts your company is placed next to the host's.
 
 - **Play your own brothers in someone else's battle:** the host's game runs the battle. When one of your brothers is up, the host's game waits and a battle panel opens on your screen showing the battlefield (yours green, allies blue, enemies red). Click a tile to move, or pick a skill and then a highlighted tile; Wait and End turn work as usual. Between your turns the panel shows whose turn it is. If no order arrives for 90 seconds, the host gets control of that brother for the turn.
 
@@ -42,7 +44,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 3. Press `Ctrl+J` (or restart) to reconnect with the new settings.
 4. Start campaigns with the same map seed, then press `Ctrl+H`. The other player should get a notification, and each of you should see the other's company on the map.
 
-**Testing alone:** start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos. When you start a battle, Bot joins 3 seconds later as reinforcements, using copies of your own frontline brothers named "Bot's ...", and plays them itself: it attacks enemies in reach, otherwise steps towards the nearest enemy and ends its turn.
+**Testing alone:** for the Multiplayer button, play any campaign for a few seconds while the bot relay runs (the bot remembers that world in `relay/bot-state.json`), quit to the main menu and use Multiplayer: the bot answers as host. Start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos. When you start a battle, Bot joins 3 seconds later as reinforcements, using copies of your own frontline brothers named "Bot's ...", and plays them itself: it attacks enemies in reach, otherwise steps towards the nearest enemy and ends its turn.
 
 If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothers/log.html`.
 

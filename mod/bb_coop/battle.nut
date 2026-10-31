@@ -48,9 +48,9 @@
 		catch (error) {}
 
 		local payload = { battleID = this.HostBattleID, pos = pos };
-		// The relay's test bot has no brothers of its own, so it joins with a copy of ours
+		// The relay's test bot can't make brothers itself, so our game rolls a fresh company for it
 		if (::BBCoop.Connection.isBotEnabled())
-			payload.company <- ::BBCoop.Roster.packCompany("bot").bros;
+			payload.company <- ::BBCoop.Roster.rollCompany(6);
 
 		::BBCoop.Connection.sendMessage("battle_start", payload);
 		::BBCoop.log("Battle started, told other players (" + this.HostBattleID + ")");

@@ -149,6 +149,31 @@
 		return ret;
 	}
 
+	// A freshly rolled company for the relay's test bot, made in our game (the bot has none)
+	BotBackgrounds = ["sellsword_background", "militia_background", "retired_soldier_background", "hunter_background", "brawler_background", "deserter_background", "farmhand_background", "wildman_background", "witchhunter_background", "squire_background"],
+
+	function rollCompany( _count )
+	{
+		local bros = [];
+		local roster = ::World.getTemporaryRoster();
+		for (local i = 0; i < _count; i++)
+		{
+			local bro = null;
+			try
+			{
+				bro = roster.create("scripts/entity/tactical/player");
+				bro.setStartValuesEx(this.BotBackgrounds);
+				bros.push({ key = "bot_" + i, name = bro.getName(), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
+			}
+			catch (error)
+			{
+				::BBCoop.log("Could not roll a brother for the bot: " + error);
+			}
+			if (bro != null) roster.remove(bro);
+		}
+		return bros;
+	}
+
 	// Payload sent when joining a battle. Keys let the results find the right brother later.
 	function packCompany( _keyPrefix )
 	{

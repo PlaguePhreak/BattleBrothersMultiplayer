@@ -29,6 +29,7 @@ BBCoopConnection.prototype.log = function (_text)
 // Logs on the Squirrel side and shows an on-screen toast (if enabled in settings)
 BBCoopConnection.prototype.notify = function (_text)
 {
+	if (this.mJoinWaiting && /Could not reach|failed/.test(_text)) this.setJoinStatus(_text, true);
 	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onNotify', _text);
 };
 
@@ -127,6 +128,7 @@ BBCoopConnection.prototype.join = function (_session)
 		var others = _data.players.filter(function (p) { return p !== self.mConfig.playerName; });
 		self.notify('Joined co-op session. Other players: ' + (others.length ? others.join(', ') : 'none yet'));
 		self.poll(_session);
+		if (self.mJoinWaiting) self.requestSession();
 		self.mPosTimer = setInterval(function () { self.sendPosition(_session); }, 1000);
 	});
 };
@@ -234,6 +236,11 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 	if (_msg.type === 'battle_order_error')
 	{
 		if (forMe) { this.mBattleBusy = false; this.setBattleStatus(p.text, true); this.renderBattleSidebar(); }
+		return true;
+	}
+	if (_msg.type === 'session_info')
+	{
+		if (forMe) this.onSessionInfo(_msg.from, p);
 		return true;
 	}
 	if (_msg.type === 'battle_result' && forMe) this.closeBattlePanel();
@@ -451,4 +458,145 @@ BBCoopConnection.prototype.sendBattleOrder = function (_order)
 	});
 };
 
-registerScreen("BBCoopConnection", new BBCoopConnection());
+// ---------------------------------------------------------------------------
+// Joining another player's world: Multiplayer button on the main menu, join window,
+// and the host's map seed filled into the new campaign screen.
+
+BBCoopConnection.prototype.openJoinWindow = function ()
+{
+	var self = this;
+	if (this.mJoinWindow) return;
+	var cfg = this.mConfig || { relayURL: 'http://127.0.0.1:7777', playerName: 'Player' };
+	var overlay = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '0', top: '0', right: '0', bottom: '0', 'z-index': 99500,
+		background: 'rgba(0,0,0,0.7)', color: '#e8dcc0', 'font-size': '1.7rem'
+	}).appendTo($('body'));
+	var box = $('<div/>').css({
+		position: 'absolute', left: '50%', top: '30%', width: '56rem', 'margin-left': '-28rem',
+		background: 'rgba(20,16,10,0.97)', border: '0.2rem solid #8a6d3b', padding: '2rem'
+	}).appendTo(overlay);
+	$('<div/>').text('Multiplayer: join a world').css({ 'font-size': '2.4rem', color: '#d8b56a', 'margin-bottom': '1.4rem' }).appendTo(box);
+	var field = function (_label, _value)
+	{
+		$('<div/>').text(_label).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box);
+		return $('<input type="text"/>').val(_value).css({
+			width: '100%', 'font-size': '1.8rem', padding: '0.5rem', 'margin-bottom': '1.2rem',
+			background: '#0d0b08', color: '#f0e6cc', border: '0.1rem solid #8a6d3b', 'box-sizing': 'border-box'
+		}).appendTo(box);
+	};
+	var urlInput = field("Host's address (relay)", cfg.relayURL);
+	var nameInput = field('Your name', cfg.playerName);
+	this.mJoinStatus = $('<div/>').css({ 'min-height': '2.4rem', 'margin-bottom': '1rem' }).appendTo(box);
+	var row = $('<div/>').appendTo(box);
+	var button = function (_label, _onClick)
+	{
+		return $('<div/>').text(_label).css({
+			display: 'inline-block', padding: '0.6rem 1.6rem', 'margin-right': '1rem', cursor: 'pointer',
+			border: '0.1rem solid #8a6d3b', background: 'rgba(255,255,255,0.06)'
+		}).click(_onClick).appendTo(row);
+	};
+	button('Connect', function ()
+	{
+		var url = $.trim(urlInput.val()), name = $.trim(nameInput.val());
+		if (url.indexOf('://') === -1) url = 'http://' + url;
+		if (!/:\d+\/?$/.test(url)) url = url.replace(/\/+$/, '') + ':7777';
+		if (name === '') { self.setJoinStatus('Pick a name first.', true); return; }
+		self.setJoinStatus('Connecting to ' + url + '...', false);
+		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: url, playerName: name }, function (_config)
+		{
+			self.mJoinWaiting = true;
+			self.start(_config);
+		});
+	});
+	button('Cancel', function () { self.closeJoinWindow(); });
+	this.mJoinWindow = overlay;
+};
+
+BBCoopConnection.prototype.closeJoinWindow = function ()
+{
+	if (this.mJoinWindow) this.mJoinWindow.remove();
+	this.mJoinWindow = null;
+	this.mJoinStatus = null;
+	this.mJoinWaiting = false;
+	if (this.mJoinTimer) { clearTimeout(this.mJoinTimer); this.mJoinTimer = null; }
+};
+
+BBCoopConnection.prototype.setJoinStatus = function (_text, _isError)
+{
+	if (this.mJoinStatus) this.mJoinStatus.text(_text).css('color', _isError ? '#e07060' : '#e8dcc0');
+};
+
+// Called once we are connected while the join window waits
+BBCoopConnection.prototype.requestSession = function ()
+{
+	var self = this;
+	this.setJoinStatus('Connected. Asking the host for its world...', false);
+	this.send({ type: 'session_request', payload: {} });
+	if (this.mJoinTimer) clearTimeout(this.mJoinTimer);
+	this.mJoinTimer = setTimeout(function ()
+	{
+		self.mJoinTimer = null;
+		if (self.mJoinWaiting) self.setJoinStatus('No host answered. The host must be connected and on the world map.', true);
+	}, 10000);
+};
+
+BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
+{
+	if (!this.mJoinWaiting) return;
+	if (_info.error) { this.setJoinStatus(_from + ': ' + _info.error, true); return; }
+	this.closeJoinWindow();
+	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
+	this.showToast('Joining ' + _from + "'s world. Pick your origin; the map seed is set to theirs.");
+	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
+};
+
+(function ()
+{
+	if (typeof MainMenuModule !== 'undefined')
+	{
+		var createButtons = MainMenuModule.prototype.createMainMenuButtons;
+		MainMenuModule.prototype.createMainMenuButtons = function ()
+		{
+			createButtons.apply(this, arguments);
+			try
+			{
+				var row = $('<div class="row"></div>');
+				var layout = $('<div class="l-center"></div>');
+				row.append(layout);
+				layout.createTextButton('Multiplayer', function ()
+				{
+					if (window.BBCoopScreen) window.BBCoopScreen.openJoinWindow();
+				}, '', 4);
+				// right below "New Campaign"
+				var first = this.mButtonContainer.children('.row').first();
+				if (first.length) row.insertAfter(first); else this.mButtonContainer.append(row);
+			}
+			catch (e) { console.error('BBCoop: could not add the Multiplayer button: ' + e); }
+		};
+	}
+
+	if (typeof NewCampaignMenuModule !== 'undefined')
+	{
+		var show = NewCampaignMenuModule.prototype.show;
+		NewCampaignMenuModule.prototype.show = function ()
+		{
+			show.apply(this, arguments);
+			var pending = window.BBCoopPendingJoin;
+			if (pending && this.mSeed)
+			{
+				this.mSeed.setInputText(pending.seed);
+				this.mSeed.attr('readonly', 'readonly');
+			}
+		};
+		var hide = NewCampaignMenuModule.prototype.hide;
+		NewCampaignMenuModule.prototype.hide = function ()
+		{
+			window.BBCoopPendingJoin = null;
+			if (this.mSeed) this.mSeed.removeAttr('readonly');
+			return hide.apply(this, arguments);
+		};
+	}
+})();
+
+window.BBCoopScreen = new BBCoopConnection();
+registerScreen("BBCoopConnection", window.BBCoopScreen);

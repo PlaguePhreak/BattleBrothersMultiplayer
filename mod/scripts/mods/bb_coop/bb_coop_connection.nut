@@ -64,6 +64,27 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 
 	// ---- called from JS ----
 
+	// Join window: save the address and name the player typed, return the config to connect with
+	function applyJoinSettings( _data )
+	{
+		try
+		{
+			::BBCoop.Mod.ModSettings.getSetting("RelayURL").set(_data.relayURL);
+			::BBCoop.Mod.ModSettings.getSetting("PlayerName").set(_data.playerName);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not save the join settings: " + error);
+		}
+		return this.getConfig();
+	}
+
+	// The host answered: open the new campaign screen with its seed
+	function startJoin( _info )
+	{
+		::BBCoop.Join.start(_info);
+	}
+
 	function onLog( _text )
 	{
 		::BBCoop.log(_text);
@@ -111,6 +132,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
+				break;
+			case "session_request":
+				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
 				break;
 			case "battle_order":
 				::BBCoop.Remote.onOrder(_msg.from, _msg.payload);

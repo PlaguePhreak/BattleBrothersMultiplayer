@@ -27,6 +27,7 @@ page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co
 ::include("bb_coop/roster.nut");
 ::include("bb_coop/battle.nut");
 ::include("bb_coop/remote.nut");
+::include("bb_coop/join.nut");
 
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)
 ::Hooks.registerJS("ui/mods/bb_coop/bb_coop_connection.js");

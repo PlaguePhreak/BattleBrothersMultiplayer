@@ -8,9 +8,11 @@
 'use strict';
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -77,14 +79,30 @@ function pushMessage(from, type, payload) {
 const BOT_NAME = 'Bot';
 const bot = { target: null, seed: '', angle: 0 };
 
+// The bot remembers the last world it saw, so it can act as a host for the Multiplayer
+// join test: play a campaign once, then use Multiplayer from the main menu.
+const BOT_STATE_FILE = path.join(__dirname, 'bot-state.json');
+let botWorld = null;
+try { botWorld = JSON.parse(fs.readFileSync(BOT_STATE_FILE, 'utf8')); } catch (e) {}
+let botWorldSaved = 0;
+function rememberWorld(p) {
+  if (!p.seed) return;
+  botWorld = { seed: p.seed, x: p.x, y: p.y };
+  const now = Date.now();
+  if (now - botWorldSaved < 10000) return;
+  botWorldSaved = now;
+  try { fs.writeFileSync(BOT_STATE_FILE, JSON.stringify(botWorld)); } catch (e) {}
+}
+
 function botHear(msg) {
   if (msg.type === 'pos' && msg.payload) {
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
+    rememberWorld(msg.payload);
   } else if (msg.type === 'hello') {
     setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}!` }), 500);
   } else if (msg.type === 'battle_start' && msg.payload) {
-    // join with the copy of the host's own brothers that the game sends when the bot is on
+    // join with the company the host's game rolled for the bot
     const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));
     if (!bros.length) return console.log('Bot: battle started, but no company copy was sent');
     setTimeout(() => pushMessage(BOT_NAME, 'battle_join', { battleID: msg.payload.battleID, to: msg.from, bros }), 3000);
@@ -92,6 +110,14 @@ function botHear(msg) {
   } else if (msg.type === 'battle_result' && msg.payload && msg.payload.to === BOT_NAME) {
     const dead = msg.payload.bros.filter((b) => b.dead).map((b) => b.name);
     console.log(`Bot: battle over, ${msg.payload.bros.length - dead.length} survived, fallen: ${dead.join(', ') || 'none'}`);
+  } else if (msg.type === 'session_request') {
+    // stand in as the host: offer the last world we saw, with the bot's company sitting where the player was
+    const info = botWorld
+      ? { to: msg.from, seed: botWorld.seed, x: botWorld.x, y: botWorld.y }
+      : { to: msg.from, error: "Bot hasn't seen a world yet. Play a campaign for a few seconds first so it learns the seed, then try again." };
+    console.log(`Bot: ${msg.from} asked to join, ${botWorld ? 'offering seed ' + botWorld.seed : 'no world known yet'}`);
+    if (botWorld) Object.assign(bot, { target: { x: botWorld.x, y: botWorld.y }, seed: botWorld.seed });
+    setTimeout(() => pushMessage(BOT_NAME, 'session_info', info), 500);
   } else if (msg.type === 'battle_view' && msg.payload && msg.payload.to === BOT_NAME) {
     botBattleView(msg.from, msg.payload);
   } else if (msg.type === 'battle_order_error' && msg.payload && msg.payload.to === BOT_NAME) {
