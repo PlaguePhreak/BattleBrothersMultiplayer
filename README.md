@@ -8,7 +8,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 
 ## What it does
 
-- **Loot for joiners:** when the host wins, the loot is split before the loot screen opens. Gear from a joiner's own fallen brothers goes back to them; the rest is shared by how many brothers each player brought. A joiner's share lands in their stash, and crowns and supplies go straight to their stock. Only allies who are still connected get a share; players who joined against the host get none.
+- **Loot for joiners: what you kill, you get.** When the host wins, each enemy's gear goes to the player whose brother killed it, gear from a joiner's own fallen brothers goes back to them, and loot no single enemy carried (crowns, the party's stash, ammo, armor parts) is shared by number of kills. A joiner's share lands in their stash; crowns and supplies go straight to their stock. Only allies who are still connected get a share; players who joined against the host get none.
 
 - **Safe sessions:** games send a heartbeat every 5 seconds, also during battles. If a player goes quiet for 20 seconds mid-battle, the host controls their brothers until they are back. If the host goes quiet for 60 seconds (crash, quit), or the battle ends without results, the joiner's brothers come home unharmed. While your brothers are away the world stays paused and your own fights are blocked. If the relay restarts, games notice and catch up.
 
