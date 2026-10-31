@@ -120,6 +120,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.notify(_clan == "" ? "You left your clan." : "You are now in the clan " + _clan + ".");
 	}
 
+	// A co-op text field has focus: the game ignores keys until it loses focus
+	function setTyping( _typing )
+	{
+		::BBCoop.Typing = _typing == true;
+	}
+
 	function onLog( _text )
 	{
 		::BBCoop.log(_text);

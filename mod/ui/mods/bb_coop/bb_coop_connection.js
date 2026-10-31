@@ -506,10 +506,7 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 	var field = function (_label, _value)
 	{
 		$('<div/>').text(_label).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box);
-		return $('<input type="text"/>').val(_value).css({
-			width: '100%', 'font-size': '1.8rem', padding: '0.5rem', 'margin-bottom': '1.2rem',
-			background: '#0d0b08', color: '#f0e6cc', border: '0.1rem solid #8a6d3b', 'box-sizing': 'border-box'
-		}).appendTo(box);
+		return self.makeInput(box, _value, '100%', function () { connect(); }, function () { self.closeJoinWindow(); }).css('margin-bottom', '1.2rem');
 	};
 	var urlInput = field("Host's address (relay)", cfg.relayURL);
 	var nameInput = field('Your name', cfg.playerName);
@@ -524,7 +521,7 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 			border: '0.1rem solid #8a6d3b', background: 'rgba(255,255,255,0.06)'
 		}).click(_onClick).appendTo(row);
 	};
-	button('Connect', function ()
+	var connect = function ()
 	{
 		var url = $.trim(urlInput.val()), name = $.trim(nameInput.val());
 		// a bare address ("100.1.2.3") gets the relay's default port; a full URL
@@ -541,7 +538,8 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 			self.mJoinWaiting = true;
 			self.start(_config);
 		});
-	});
+	};
+	button('Connect', connect);
 	button('Cancel', function () { self.closeJoinWindow(); });
 	this.mJoinWindow = overlay;
 };
@@ -550,6 +548,7 @@ BBCoopConnection.prototype.closeJoinWindow = function ()
 {
 	if (this.mJoinWindow) this.mJoinWindow.remove();
 	this.mJoinWindow = null;
+	this.setTyping(false);
 	this.mJoinStatus = null;
 	this.mJoinWaiting = false;
 	if (this.mJoinTimer) { clearTimeout(this.mJoinTimer); this.mJoinTimer = null; }
@@ -641,6 +640,42 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	}
 })();
 // ---------------------------------------------------------------------------
+// Text fields. The game's global CSS turns off text selection for every element
+// (* { user-select: none }), which also stops typing in a plain <input>; vanilla's own
+// inputs switch it back on, and so do ours. While a field has focus the game is told to
+// ignore keys, so typing a name doesn't open the character screen or pause the game.
+// Enter runs _onEnter, Escape runs _onEscape.
+
+BBCoopConnection.prototype.makeInput = function (_parent, _value, _width, _onEnter, _onEscape)
+{
+	var self = this;
+	var input = $('<input type="text"/>').val(_value).css({
+		width: _width, 'font-size': '1.8rem', padding: '0.5rem', 'box-sizing': 'border-box',
+		background: '#0d0b08', color: '#f0e6cc', border: '0.1rem solid #8a6d3b', outline: 'none',
+		'-webkit-user-select': 'text', 'user-select': 'text', cursor: 'text'
+	}).appendTo(_parent);
+	input.on('focus', function () { self.setTyping(true); });
+	input.on('blur', function () { self.setTyping(false); });
+	input.on('mousedown click', function (_event) { _event.stopPropagation(); input.focus(); });
+	input.on('keydown', function (_event)
+	{
+		_event.stopPropagation();
+		var code = _event.which || _event.keyCode;
+		if (code === 13 && _onEnter) { _event.preventDefault(); _onEnter(); }
+		else if (code === 27 && _onEscape) { _event.preventDefault(); _onEscape(); }
+	});
+	input.on('keyup keypress', function (_event) { _event.stopPropagation(); });
+	return input;
+};
+
+BBCoopConnection.prototype.setTyping = function (_typing)
+{
+	if (this.mTyping === _typing) return;
+	this.mTyping = _typing;
+	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'setTyping', _typing);
+};
+
+// ---------------------------------------------------------------------------
 // Prompts (join a nearby battle, pick a side) and the clan window.
 
 BBCoopConnection.prototype.makeWindow = function (_title, _width)
@@ -706,19 +741,18 @@ BBCoopConnection.prototype.notePlayer = function (_msg)
 BBCoopConnection.prototype.openClanWindow = function (_myClan)
 {
 	var self = this;
-	if (this.mClanWindow) { this.mClanWindow.remove(); this.mClanWindow = null; return; }
+	if (this.mClanWindow) { this.mClanWindow.remove(); this.mClanWindow = null; this.setTyping(false); return; }
 	var w = this.makeWindow('Clan', 60);
 	this.mClanWindow = w.overlay;
-	var close = function () { if (self.mClanWindow) self.mClanWindow.remove(); self.mClanWindow = null; };
+	var close = function () { if (self.mClanWindow) self.mClanWindow.remove(); self.mClanWindow = null; self.setTyping(false); };
 	var setClan = function (_name) { SQ.call(self.mSQHandle, 'setClan', _name); close(); };
 
 	$('<div/>').text(_myClan ? 'Your clan: ' + _myClan : "You're not in a clan.").css('margin-bottom', '1rem').appendTo(w.box);
 	$('<div/>').text('Clanmates always fight on the same side. Anyone else gets to choose a side when joining your battles.').css({ color: '#a89c80', 'margin-bottom': '1.2rem' }).appendTo(w.box);
 
-	var input = $('<input type="text"/>').val(_myClan || '').attr('placeholder', 'Clan name').css({
-		width: '60%', 'font-size': '1.8rem', padding: '0.5rem', background: '#0d0b08', color: '#f0e6cc', border: '0.1rem solid #8a6d3b'
-	}).appendTo(w.box);
-	this.makeButton(w.box, _myClan ? 'Rename' : 'Create', function () { var n = $.trim(input.val()); if (n !== '') setClan(n); });
+	var create = function () { var n = $.trim(input.val()); if (n !== '') setClan(n); };
+	var input = this.makeInput(w.box, _myClan || '', '60%', create, close).attr('placeholder', 'Clan name');
+	this.makeButton(w.box, _myClan ? 'Rename' : 'Create', create);
 	if (_myClan) this.makeButton(w.box, 'Leave clan', function () { setClan(''); });
 
 	$('<div/>').text('Players online').css({ 'font-size': '2rem', color: '#d8b56a', margin: '1.6rem 0 0.6rem 0' }).appendTo(w.box);
