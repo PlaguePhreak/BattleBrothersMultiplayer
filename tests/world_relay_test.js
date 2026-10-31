@@ -1,4 +1,4 @@
-// Shared world through the relay: world updates replace older copies, and the bot keeps the
+// Shared world and trading through the relay: world updates replace older copies, and the bot keeps the
 // last world a host sent and hosts it for a joiner (destroyed parties and camps are removed).
 // Usage: node tests/world_relay_test.js   (exits non-zero on failure). Runs a relay copy in a temp folder.
 const http = require('http'); const fs = require('fs'); const os = require('os'); const path = require('path');
@@ -56,6 +56,21 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
     ambush = poll.messages.find((m) => m.type === 'world_ambush' && m.payload.to === 'B');
   }
   check(ambush && ambush.payload.id === '13', 'hostile party walks to the joiner and attacks');
+  // trading with the bot: accepts goods, declines a few crowns, gifts crowns on hello
+  let since2 = poll.seq;
+  await send('B', 'trade_offer', { to: 'Bot', id: 't1', items: [{ name: 'Dagger' }], crowns: 0, bros: [] });
+  await send('B', 'trade_offer', { to: 'Bot', id: 't2', items: [], crowns: 5, bros: [] });
+  await send('B', 'hello', { text: 'hi' });
+  await sleep(2600);
+  poll = await req('GET', `/poll?player=B&since=${since2}`);
+  const answers = Object.fromEntries(poll.messages.filter((m) => m.type === 'trade_answer').map((m) => [m.payload.id, m.payload.accepted]));
+  check(answers.t1 === true && answers.t2 === false, 'bot accepts goods and declines a few crowns');
+  const gift = poll.messages.find((m) => m.type === 'trade_offer' && m.from === 'Bot');
+  check(gift && gift.payload.crowns === 100, 'bot offers a gift on hello');
+  await send('B', 'trade_answer', { to: 'Bot', id: gift.payload.id, accepted: true });
+  await sleep(300);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'trade_confirm' && m.payload.id === gift.payload.id), 'bot confirms its accepted gift');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });

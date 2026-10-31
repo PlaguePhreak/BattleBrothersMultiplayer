@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
@@ -134,6 +134,7 @@ function rememberWorld(p) {
 // destroys is taken out of the copy, so the round trip can be tested with one game.
 const botFollowers = new Map(); // player -> last time they asked for the world
 const playerPos = new Map();    // player -> { x, y } from their position updates
+const botOffers = new Set();     // trade offers the bot sent that wait for an answer
 const botAmbushed = new Map();  // party id -> time the bot last made it attack
 let botWorldSent = 0, botPartiesSent = 0;
 function botWorldMessage(msg) {
@@ -222,7 +223,24 @@ function botHear(msg) {
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
   } else if (msg.type === 'hello') {
-    setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}!` }), 500);
+    setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}! Here are some crowns.` }), 500);
+    // a gift, to test receiving a trade offer
+    const id = `Bot_gift_${Date.now()}`;
+    botOffers.add(id);
+    setTimeout(() => pushMessage(BOT_NAME, 'trade_offer', { to: msg.from, id, items: [], crowns: 100, bros: [] }), 1000);
+  } else if (msg.type === 'trade_offer' && msg.payload && msg.payload.to === BOT_NAME) {
+    // the bot takes anything, except a few crowns on their own (to test a declined offer)
+    const p = msg.payload;
+    const stingy = !p.items.length && !p.bros.length && p.crowns < 10;
+    const what = [p.crowns ? `${p.crowns} crowns` : '', ...p.items.map((i) => i.name), ...p.bros.map((b) => b.name)].filter(Boolean).join(', ');
+    console.log(`Bot: ${msg.from} offers ${what || 'nothing'}; ${stingy ? 'declining (only a few crowns)' : 'accepting'}`);
+    setTimeout(() => pushMessage(BOT_NAME, 'trade_answer', { to: msg.from, id: p.id, accepted: !stingy }), 2000);
+  } else if (msg.type === 'trade_confirm' && msg.payload && msg.payload.to === BOT_NAME) {
+    console.log(`Bot: ${msg.from} handed over the goods`);
+  } else if (msg.type === 'trade_answer' && msg.payload && msg.payload.to === BOT_NAME) {
+    const known = botOffers.delete(msg.payload.id);
+    if (msg.payload.accepted) pushMessage(BOT_NAME, known ? 'trade_confirm' : 'trade_cancel', { to: msg.from, id: msg.payload.id });
+    console.log(`Bot: ${msg.from} ${msg.payload.accepted ? 'accepted' : 'declined'} the bot's gift`);
   } else if (msg.type === 'battle_start' && msg.payload) {
     // join with the company the host's game rolled for the bot
     const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));

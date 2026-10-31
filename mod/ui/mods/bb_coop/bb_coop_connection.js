@@ -730,7 +730,7 @@ BBCoopConnection.prototype.closePrompt = function (_id)
 	if (_id !== null && this.mPrompt.id !== _id) return;
 	this.mPrompt.window.remove();
 	this.mPrompt = null;
-	if (_id !== null) this.showToast('That battle is over.');
+	if (_id !== null && _id.indexOf('join:') === 0) this.showToast('That battle is over.');
 };
 
 // Everyone's clan, learned from their position updates
@@ -772,6 +772,110 @@ BBCoopConnection.prototype.openClanWindow = function (_myClan)
 	if (!any) $('<div/>').text('Nobody else is on the world map right now.').css('color', '#a89c80').appendTo(w.box);
 	$('<div/>').css('height', '1rem').appendTo(w.box);
 	this.makeButton(w.box, 'Close', close);
+};
+
+// ---------------------------------------------------------------------------
+// Trade window (Ctrl+T): pick a nearby player, then items, brothers and crowns to send.
+// _data: { players, items: [{ id, name, icon, value, amount }], bros: [{ id, name, level, background }], crowns }
+// or { error }
+
+BBCoopConnection.prototype.openTradeWindow = function (_data)
+{
+	var self = this;
+	if (this.mTradeWindow) { this.closeTradeWindow(); return; }
+	if (_data.error) { this.showToast(_data.error); return; }
+	var w = this.makeWindow('Trade', 80);
+	w.box.css({ top: '10%' });
+	this.mTradeWindow = w.overlay;
+	var chosen = { items: {}, bros: {} };
+	var to = _data.players[0];
+
+	// recipient
+	var who = $('<div/>').css('margin-bottom', '1rem').appendTo(w.box);
+	var whoButtons = [];
+	$('<span/>').text('Send to: ').appendTo(who);
+	for (var p = 0; p < _data.players.length; p++)
+	{
+		(function (_name)
+		{
+			var b = self.makeButton(who, _name, function ()
+			{
+				to = _name;
+				for (var i = 0; i < whoButtons.length; i++) whoButtons[i].css('background', 'rgba(255,255,255,0.06)');
+				b.css('background', 'rgba(216,181,106,0.35)');
+			});
+			if (_name === to) b.css('background', 'rgba(216,181,106,0.35)');
+			whoButtons.push(b);
+		})(_data.players[p]);
+	}
+
+	var total = $('<div/>').css({ color: '#a89c80', 'margin-bottom': '0.6rem' });
+	var updateTotal = function ()
+	{
+		var n = 0, value = 0, b = 0;
+		for (var k in chosen.items) { n++; value += chosen.items[k]; }
+		for (var k2 in chosen.bros) b++;
+		total.text('Chosen: ' + n + ' items (worth ' + value + ' crowns), ' + b + ' brothers');
+	};
+
+	var makeList = function (_title, _entries, _label, _bucket, _worth)
+	{
+		$('<div/>').text(_title).css({ 'font-size': '2rem', color: '#d8b56a', margin: '0.8rem 0 0.4rem 0' }).appendTo(w.box);
+		var list = $('<div/>').css({ 'max-height': '22rem', 'overflow-y': 'auto', border: '0.1rem solid #5a4a2a', padding: '0.4rem' }).appendTo(w.box);
+		if (_entries.length === 0) $('<div/>').text('None.').css('color', '#a89c80').appendTo(list);
+		for (var i = 0; i < _entries.length; i++)
+		{
+			(function (_e)
+			{
+				var row = $('<div/>').css({ padding: '0.3rem 0.6rem', cursor: 'pointer', display: 'flex', 'align-items': 'center' }).appendTo(list);
+				if (_e.icon) $('<img/>').attr('src', 'coui://gfx/ui/items/' + _e.icon).css({ width: '3.6rem', height: '3.6rem', 'margin-right': '0.8rem' }).appendTo(row);
+				$('<span/>').text(_label(_e)).appendTo(row);
+				row.click(function ()
+				{
+					if (_e.id in chosen[_bucket]) { delete chosen[_bucket][_e.id]; row.css('background', 'transparent'); }
+					else { chosen[_bucket][_e.id] = _worth(_e); row.css('background', 'rgba(216,181,106,0.3)'); }
+					updateTotal();
+				});
+			})(_entries[i]);
+		}
+	};
+	makeList('Items in your stash (click to pick)', _data.items,
+		function (_e) { return _e.name + (_e.amount ? ' (' + _e.amount + ')' : '') + ' - ' + _e.value + ' crowns'; }, 'items',
+		function (_e) { return _e.value; });
+	makeList('Brothers (click to pick)', _data.bros,
+		function (_e) { return _e.name + ', ' + _e.background + ', level ' + _e.level; }, 'bros',
+		function () { return 0; });
+
+	var send = function ()
+	{
+		var crowns = parseInt(crownsInput.val(), 10);
+		if (isNaN(crowns) || crowns < 0) crowns = 0;
+		var data = { to: to, items: [], bros: [], crowns: crowns };
+		for (var k in chosen.items) data.items.push(parseInt(k, 10));
+		for (var k2 in chosen.bros) data.bros.push(parseInt(k2, 10));
+		SQ.call(self.mSQHandle, 'sendTrade', data, function (_error)
+		{
+			if (_error) { status.text(_error).css('color', '#e07060'); return; }
+			self.closeTradeWindow();
+		});
+	};
+	var close = function () { self.closeTradeWindow(); };
+
+	var crownsRow = $('<div/>').css('margin', '1rem 0').appendTo(w.box);
+	$('<span/>').text('Crowns (you have ' + _data.crowns + '): ').appendTo(crownsRow);
+	var crownsInput = this.makeInput(crownsRow, '0', '14rem', send, close);
+	total.appendTo(w.box);
+	updateTotal();
+	var status = $('<div/>').css({ 'min-height': '2.2rem', 'margin-bottom': '0.6rem' }).appendTo(w.box);
+	this.makeButton(w.box, 'Send offer', send);
+	this.makeButton(w.box, 'Cancel', close);
+};
+
+BBCoopConnection.prototype.closeTradeWindow = function ()
+{
+	if (this.mTradeWindow) this.mTradeWindow.remove();
+	this.mTradeWindow = null;
+	this.setTyping(false);
 };
 
 window.BBCoopScreen = new BBCoopConnection();
