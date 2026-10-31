@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -128,6 +128,11 @@ function botHear(msg) {
     console.log(`Bot: ${msg.from} asked to join, ${botWorld ? 'offering seed ' + botWorld.seed : 'no world known yet'}`);
     if (botWorld) Object.assign(bot, { target: { x: botWorld.x, y: botWorld.y }, seed: botWorld.seed });
     setTimeout(() => pushMessage(BOT_NAME, 'session_info', info), 500);
+  } else if (msg.type === 'battle_loot' && msg.payload && msg.payload.to === BOT_NAME) {
+    const items = msg.payload.items || [];
+    const crowns = items.filter((i) => i.name === 'Crowns').reduce((n, i) => n + (i.amount || 0), 0);
+    const names = items.filter((i) => i.name !== 'Crowns').map((i) => i.name);
+    console.log(`Bot: got its share of the loot from ${msg.from}: ${names.join(', ') || 'no items'}${crowns ? `, ${crowns} crowns` : ''}`);
   } else if (msg.type === 'battle_view' && msg.payload && msg.payload.to === BOT_NAME) {
     botBattleView(msg.from, msg.payload);
   } else if (msg.type === 'battle_order_error' && msg.payload && msg.payload.to === BOT_NAME) {
