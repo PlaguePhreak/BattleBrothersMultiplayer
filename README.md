@@ -4,9 +4,11 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.6.0, clans and choosing sides.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.7.0, safe sessions.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
 
 ## What it does
+
+- **Safe sessions:** games send a heartbeat every 5 seconds, also during battles. If a player goes quiet for 20 seconds mid-battle, the host controls their brothers until they are back. If the host goes quiet for 60 seconds (crash, quit), or the battle ends without results, the joiner's brothers come home unharmed. While your brothers are away the world stays paused and your own fights are blocked. If the relay restarts, games notice and catch up.
 
 - **Same fight, same battle:** attacking (or being attacked) within 400 units of another player's ongoing battle asks whether to join it instead of starting your own. If your side wins, the parties you had attacked are beaten in your world too. A battle nearby (within the join range) also pops up a join prompt.
 - **Clans and sides:** `Ctrl+K` opens the clan window: create a clan or join another player's. Clanmates always join on the same side; anyone else chooses to join on the host's side or against the host. Brothers joining against the host fight for the enemy and are played by their owner.

@@ -72,14 +72,10 @@
 
 	function onJoinRequest( _from, _payload )
 	{
-		if (this.HostBattleID == null || !this.isInTactical())
+		if (this.HostBattleID == null || !this.isInTactical() || _payload.battleID != this.HostBattleID)
 		{
-			::BBCoop.log(_from + " tried to join, but we are not in a battle");
-			return;
-		}
-		if (_payload.battleID != this.HostBattleID)
-		{
-			::BBCoop.log(_from + " tried to join an old battle");
+			::BBCoop.log(_from + " tried to join a battle that is already over");
+			::BBCoop.Connection.sendMessage("join_refused", { to = _from, battleID = _payload.battleID, text = "That battle is already over." });
 			return;
 		}
 		if (_from in this.JoinedOwners) return;
@@ -250,6 +246,8 @@
 	// ================= ally =================
 
 	PendingSide = "ally",
+	PendingBattleID = null,
+	HostTimeout = 60.0,     // no word from the host this long while away: our brothers come home
 	LocalEnemies = null,    // world parties we attacked ourselves before joining (removed if our side wins)
 	CombatArgs = null,      // vanilla combat dialog put on hold while the join prompt is open
 	EngageRange = 400.0,    // attacking within this distance of another player's battle offers to join it
@@ -334,8 +332,39 @@
 		}
 	}
 
+	// Our brothers come back as they left: nothing happened to them in our world
+	function releaseAway( _reason )
+	{
+		if (this.PendingRefs == null) return;
+		this.PendingRefs = null;
+		this.PendingHost = null;
+		this.PendingBattleID = null;
+		this.LocalEnemies = null;
+		::BBCoop.Connection.closeBattlePanel();
+		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
+	}
+
+	function onJoinRefused( _from, _payload )
+	{
+		if (this.PendingRefs != null && _from == this.PendingHost && _payload.battleID == this.PendingBattleID)
+			this.releaseAway(_from + ": " + _payload.text);
+	}
+
+	// Every world frame while our brothers are away
+	function updateAway()
+	{
+		if (this.PendingRefs == null) return;
+		try { if (!::World.State.isPaused()) ::World.State.setPause(true); } catch (error) {}
+		if (!::BBCoop.isOnline(this.PendingHost, this.HostTimeout))
+			this.releaseAway("Lost contact with " + this.PendingHost + " during the battle.");
+	}
+
 	function onBattleOver( _from, _payload )
 	{
+		// results come before this message; if none came, they are lost
+		if (this.PendingRefs != null && _from == this.PendingHost && _payload.battleID == this.PendingBattleID)
+			this.releaseAway("No results arrived from " + _from + "'s battle.");
+
 		if (this.Invite != null && this.Invite.battleID == _payload.battleID)
 		{
 			this.Invite = null;
@@ -388,6 +417,8 @@
 		this.PendingRefs = packed.refs;
 		this.PendingHost = this.Invite.host;
 		this.PendingSide = _side;
+		this.PendingBattleID = this.Invite.battleID;
+		::BBCoop.Seen[this.PendingHost] <- ::Time.getRealTimeF();
 		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros, side = _side });
 		this.Invite = null;
 		try { ::World.State.setPause(true); } catch (error) {}
@@ -455,6 +486,7 @@
 		}
 		this.PendingRefs = null;
 		this.PendingHost = null;
+		this.PendingBattleID = null;
 
 		// We fought next to the host against the parties we had attacked ourselves: if the host's side
 		// won, those parties are beaten in our world too
@@ -529,5 +561,21 @@
 		}
 		if (intercepted) return;
 		return __original(_isPlayerInitiated, _isCombatantsVisible, _allowFormationPicking, _properties, _pos);
+	}
+});
+
+// While our brothers fight elsewhere, the world stays paused and we watch for the host going quiet
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.onUpdate = @(__original) function()
+	{
+		__original();
+		try
+		{
+			::BBCoop.Battle.updateAway();
+		}
+		catch (error)
+		{
+			::BBCoop.log("updateAway failed: " + error);
+		}
 	}
 });

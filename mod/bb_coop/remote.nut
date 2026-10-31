@@ -10,6 +10,10 @@
 
 ::BBCoop.Remote <- {
 	TimeoutSeconds = 90.0,  // no order for this long: the host takes over that turn
+	OfflineSeconds = 20.0,  // no message at all for this long: the player counts as disconnected
+	ResendSeconds = 15.0,   // waiting for orders: send the view again in case it got lost
+	OfflineNotified = {},
+	LastViewSent = 0.0,
 
 	Orders = [],            // orders waiting for the active brother
 	ActiveID = null,        // entity id whose turn we last saw
@@ -28,6 +32,7 @@
 		this.NeedView = false;
 		this.TookOverID = null;
 		this.LastViewEntity = null;
+		this.OfflineNotified.clear();
 	}
 
 	function getOwner( _e )
@@ -43,6 +48,21 @@
 		if (this.getOwner(_e) == null) return false;
 		if (_e.getID() == this.TookOverID) return false;
 		if (_e.getMoraleState() == ::Const.MoraleState.Fleeing) return false; // vanilla AI runs fleeing brothers
+		local owner = this.getOwner(_e);
+		if (!::BBCoop.isOnline(owner, this.OfflineSeconds))
+		{
+			if (!(owner in this.OfflineNotified))
+			{
+				this.OfflineNotified[owner] <- true;
+				::BBCoop.notify(owner + " seems to have disconnected. You control their brothers until they are back.");
+			}
+			return false;
+		}
+		if (owner in this.OfflineNotified)
+		{
+			delete this.OfflineNotified[owner];
+			::BBCoop.notify(owner + " is back and controls their brothers again.");
+		}
 		return true;
 	}
 
@@ -194,6 +214,7 @@
 		try
 		{
 			::BBCoop.Connection.sendMessage("battle_view", this.buildView(_owner, _active));
+			this.LastViewSent = ::Time.getRealTimeF();
 		}
 		catch (error)
 		{
@@ -266,6 +287,9 @@
 			this.NeedView = false;
 			this.sendView(this.getOwner(_e), _e);
 		}
+
+		if (this.Orders.len() == 0 && now - this.LastViewSent > this.ResendSeconds && now - this.LastOrderTime > this.ResendSeconds)
+			this.sendView(this.getOwner(_e), _e);
 
 		if (this.Orders.len() != 0)
 		{

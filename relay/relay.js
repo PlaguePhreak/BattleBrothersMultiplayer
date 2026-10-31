@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.6.2';
+const VERSION = '0.7.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -20,6 +20,8 @@ const POLL_HOLD_MS = 8000;      // must stay below the mod's 10s request timeout
 const MAX_MESSAGES = 500;       // keep a short history in memory
 
 let seq = 0;
+// Changes every time the relay starts, so games notice a restart and catch up
+const BOOT = crypto.randomBytes(4).toString('hex');
 const messages = [];            // { seq, from, type, payload, time }
 const players = new Map();      // name -> { lastSeen, modVersion, gameVersion }
 const waiting = new Set();      // pending long-poll requests
@@ -192,9 +194,14 @@ function botBattleView(host, view) {
   botOrder(host, view, { action: 'end' });
 }
 
+let botAliveSent = 0;
 function botTick() {
-  if (!bot.target) return;
   touch(BOT_NAME);
+  if (!bot.target) {
+    // no world position yet (e.g. the relay restarted mid-battle): still tell games the bot is here
+    if (Date.now() - botAliveSent > 5000) { botAliveSent = Date.now(); pushMessage(BOT_NAME, 'alive', {}); }
+    return;
+  }
   bot.angle += 0.15;
   const r = 250;
   pushMessage(BOT_NAME, 'pos', {
@@ -234,7 +241,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
       pushMessage(body.player, 'join', { modVersion: body.modVersion, gameVersion: body.gameVersion });
-      return sendJSON(res, 200, { ok: true, seq, players: activePlayers(), bot: BOT });
+      return sendJSON(res, 200, { ok: true, seq, boot: BOOT, players: activePlayers(), bot: BOT });
     }
 
     if (req.method === 'POST' && url.pathname === '/send') {
@@ -247,10 +254,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/poll') {
       const player = url.searchParams.get('player');
-      const since = parseInt(url.searchParams.get('since') || '0', 10);
+      let since = parseInt(url.searchParams.get('since') || '0', 10);
+      if (since > seq) since = 0; // the client knew an older relay run: send everything from this one
       touch(player);
       const pending = messagesSince(since).filter((m) => m.from !== player);
-      if (pending.length) return sendJSON(res, 200, { seq, messages: pending });
+      if (pending.length) return sendJSON(res, 200, { seq, boot: BOOT, messages: pending });
       // nothing yet: hold the request open until something arrives
       const w = {
         flush() {
@@ -258,10 +266,10 @@ const server = http.createServer(async (req, res) => {
           if (!msgs.length) return;
           clearTimeout(w.timer);
           waiting.delete(w);
-          sendJSON(res, 200, { seq, messages: msgs });
+          sendJSON(res, 200, { seq, boot: BOOT, messages: msgs });
         },
       };
-      w.timer = setTimeout(() => { waiting.delete(w); sendJSON(res, 200, { seq, messages: [] }); }, POLL_HOLD_MS);
+      w.timer = setTimeout(() => { waiting.delete(w); sendJSON(res, 200, { seq, boot: BOOT, messages: [] }); }, POLL_HOLD_MS);
       req.on('close', () => { clearTimeout(w.timer); waiting.delete(w); });
       waiting.add(w);
       return;

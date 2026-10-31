@@ -27,6 +27,13 @@ page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co
 	return ret;
 }
 
+// When we last heard from each player (any message counts; games send a heartbeat every 5s)
+::BBCoop.Seen <- {};
+::BBCoop.isOnline <- function( _name, _seconds = 20.0 )
+{
+	return (_name in ::BBCoop.Seen) && ::Time.getRealTimeF() - ::BBCoop.Seen[_name] <= _seconds;
+}
+
 ::BBCoop.log <- function( _text )
 {
 	::logInfo("[BBCoop] " + _text);

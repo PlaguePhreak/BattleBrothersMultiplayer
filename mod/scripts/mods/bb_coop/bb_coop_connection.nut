@@ -87,6 +87,11 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	function closeBattlePanel()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("closeBattlePanel", null);
+	}
+
 	function showPrompt( _prompt )
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("showPrompt", _prompt);
@@ -151,11 +156,17 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	function onMessage( _msg )
 	{
 		// messages meant for one player carry a "to" field
+		::BBCoop.Seen[_msg.from] <- ::Time.getRealTimeF();
 		if (typeof _msg.payload == "table" && ("to" in _msg.payload) && _msg.payload.to != ::BBCoop.getSetting("PlayerName"))
 			return;
 
 		switch (_msg.type)
 		{
+			case "alive":
+				break;
+			case "join_refused":
+				::BBCoop.Battle.onJoinRefused(_msg.from, _msg.payload);
+				break;
 			case "battle_start":
 				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
 				break;

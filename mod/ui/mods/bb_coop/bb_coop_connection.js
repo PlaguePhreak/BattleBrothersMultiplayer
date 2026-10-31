@@ -124,6 +124,7 @@ BBCoopConnection.prototype.join = function (_session)
 			return;
 		}
 		self.mLastSeq = _data.seq;
+		self.mBoot = _data.boot || null;
 		SQ.call(self.mSQHandle, 'setBotEnabled', _data.bot === true);
 		var others = _data.players.filter(function (p) { return p !== self.mConfig.playerName; });
 		self.notify('Joined co-op session. Other players: ' + (others.length ? others.join(', ') : 'none yet'));
@@ -143,8 +144,19 @@ BBCoopConnection.prototype.poll = function (_session)
 	{
 		if (_session !== self.mSessionId) return;
 		var delay = 0;
+		if (_status === 200 && _data !== null && _data.boot && self.mBoot && _data.boot !== self.mBoot)
+		{
+			// the relay restarted: its message numbers start over, so fetch everything from the new run
+			self.mBoot = _data.boot;
+			self.mLastSeq = 0;
+			self.notify('The relay restarted. Reconnected.');
+			self.mPollTimer = setTimeout(function () { self.poll(_session); }, 0);
+			return;
+		}
 		if (_status === 200 && _data !== null)
 		{
+			self.mPollFails = 0;
+			if (self.mRelayDown) { self.mRelayDown = false; self.notify('Connection to the relay is back.'); }
 			self.mLastSeq = _data.seq;
 			for (var i = 0; i < _data.messages.length; i++)
 			{
@@ -158,6 +170,8 @@ BBCoopConnection.prototype.poll = function (_session)
 		else
 		{
 			delay = 3000; // relay down or timed out: back off a bit
+			self.mPollFails = (self.mPollFails || 0) + 1;
+			if (self.mPollFails >= 3 && !self.mRelayDown) { self.mRelayDown = true; self.notify('Lost the connection to the relay. Retrying...'); }
 		}
 		self.mPollTimer = setTimeout(function () { self.poll(_session); }, delay);
 	});
@@ -184,9 +198,14 @@ BBCoopConnection.prototype.sendPosition = function (_session)
 	if (_session !== this.mSessionId || this.mSQHandle === null) return;
 	SQ.call(this.mSQHandle, 'getWorldPosition', null, function (_pos)
 	{
-		if (_pos === null || _pos === undefined) return;
-		// send when the company moved, and at least every 5s so the other side knows we're still here
 		var now = new Date().getTime();
+		if (_pos === null || _pos === undefined)
+		{
+			// in battle or in a menu: a heartbeat so the other players know we are still here
+			if (now - self.mLastPosSent >= 5000) { self.mLastPosSent = now; self.send({ type: 'alive', payload: {} }); }
+			return;
+		}
+		// send when the company moved, and at least every 5s so the other side knows we're still here
 		var moved = self.mLastPos === null || Math.abs(self.mLastPos.x - _pos.x) >= 1 || Math.abs(self.mLastPos.y - _pos.y) >= 1;
 		if (!moved && now - self.mLastPosSent < 5000) return;
 		self.mLastPos = _pos;
