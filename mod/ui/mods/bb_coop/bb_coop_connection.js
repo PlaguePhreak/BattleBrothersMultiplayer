@@ -25,9 +25,38 @@ BBCoopConnection.prototype.log = function (_text)
 	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onLog', _text);
 };
 
+// Logs on the Squirrel side and shows an on-screen toast (if enabled in settings)
 BBCoopConnection.prototype.notify = function (_text)
 {
 	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onNotify', _text);
+};
+
+// Small self-contained notification stack, top right, visible on every screen
+BBCoopConnection.prototype.showToast = function (_text)
+{
+	var stack = $('#bbcoop-toasts');
+	if (stack.length === 0)
+	{
+		stack = $('<div id="bbcoop-toasts"/>').css({
+			position: 'fixed', top: '9rem', right: '2rem', width: '40rem',
+			'z-index': 100000, 'pointer-events': 'none'
+		}).appendTo($('body'));
+	}
+	var toast = $('<div class="text-font-normal"/>').text('Co-op: ' + _text).css({
+		background: 'rgba(0, 0, 0, 0.85)', border: '0.1rem solid #8a6d3b', color: '#e8dcc0',
+		padding: '0.8rem 1.2rem', 'margin-bottom': '0.6rem', 'font-size': '1.6rem'
+	}).appendTo(stack);
+	setTimeout(function () { toast.fadeOut(600, function () { toast.remove(); }); }, 6000);
+};
+
+BBCoopConnection.prototype.sendHello = function (_msg)
+{
+	var self = this;
+	if (this.mConfig === null) { this.notify('Not connected to the relay yet.'); return; }
+	this.send(_msg, function (_ok)
+	{
+		self.notify(_ok ? 'Hello sent.' : 'Sending hello failed. Is the relay running?');
+	});
 };
 
 BBCoopConnection.prototype.request = function (_method, _path, _body, _callback)
@@ -128,7 +157,7 @@ BBCoopConnection.prototype.poll = function (_session)
 	});
 };
 
-BBCoopConnection.prototype.send = function (_msg)
+BBCoopConnection.prototype.send = function (_msg, _callback)
 {
 	var self = this;
 	if (this.mConfig === null) return;
@@ -139,6 +168,7 @@ BBCoopConnection.prototype.send = function (_msg)
 	}, function (_status)
 	{
 		if (_status !== 200) self.log('Send failed (status ' + _status + ')');
+		if (_callback) _callback(_status === 200);
 	});
 };
 

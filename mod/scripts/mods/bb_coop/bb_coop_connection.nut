@@ -32,10 +32,16 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	function sendHello()
 	{
 		if (!this.isConnected()) return;
-		this.m.JSHandle.asyncCall("send", {
+		this.m.JSHandle.asyncCall("sendHello", {
 			type = "hello",
 			payload = { text = "Hello from " + ::BBCoop.getSetting("PlayerName") }
 		});
+	}
+
+	function showToast( _text )
+	{
+		if (!this.isConnected()) return;
+		this.m.JSHandle.asyncCall("showToast", _text);
 	}
 
 	// ---- called from JS ----

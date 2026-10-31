@@ -2,7 +2,7 @@
 local page = ::BBCoop.Mod.ModSettings.addPage("General");
 page.addStringSetting("RelayURL", "http://127.0.0.1:7777", "Relay URL", "Address of the co-op relay server. Both players must use the same one.");
 page.addStringSetting("PlayerName", "Player", "Player name", "Shown to the other player. Must differ between the two players.");
-page.addBooleanSetting("ShowPopups", true, "Show popups", "Show co-op messages in a popup. They are always written to log.html.");
+page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 
 ::BBCoop.getSetting <- function( _id )
 {
@@ -17,8 +17,8 @@ page.addBooleanSetting("ShowPopups", true, "Show popups", "Show co-op messages i
 ::BBCoop.notify <- function( _text )
 {
 	::BBCoop.log(_text);
-	if (::BBCoop.getSetting("ShowPopups"))
-		::BBCoop.Mod.Debug.addPopupMessage(_text, ::MSU.Popup.State.Small);
+	if (::BBCoop.getSetting("ShowNotifications"))
+		::BBCoop.Connection.showToast(_text);
 }
 
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)

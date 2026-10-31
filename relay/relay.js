@@ -144,7 +144,7 @@ server.on('upgrade', (req, socket) => {
     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`);
   socket.on('data', (buf) => {
     const opcode = buf[0] & 0x0f;
-    if (opcode === 0x8) return socket.end();           // close
+    if (opcode === 0x8) return socket.end(Buffer.from([0x88, 0x00])); // answer the close frame, then close
     if (opcode !== 0x1) return;                        // only text frames
     let len = buf[1] & 0x7f, off = 2;
     if (len === 126) { len = buf.readUInt16BE(2); off = 4; }

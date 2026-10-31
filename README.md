@@ -4,14 +4,14 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.1.0, connection prototype.** It proves the game can talk to the relay. It does not add gameplay yet. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.1.1, connection prototype.** It proves the game can talk to the relay. It does not add gameplay yet. Target is the vanilla game first; Legends and other mods come later.
 
-## What v0.1.0 does
+## What v0.1.1 does
 
-- On the main menu, pings the relay and shows a popup saying whether it is reachable.
+- On the main menu, pings the relay and shows an on-screen notification (top right) saying whether it is reachable.
 - Joins a session and shows which other players are connected.
 - Tests whether the game's browser supports WebSockets (result in `log.html`).
-- `Ctrl+H` (world map or battle) sends a "hello" popup to the other player.
+- `Ctrl+H` (world map or battle) sends a "hello" notification to the other player (you get a "Hello sent" confirmation).
 - While on the world map, sends your company's position about once a second. The other player's game writes it to `log.html`.
 - `Ctrl+J` re-runs the connection test (use it after changing settings).
 

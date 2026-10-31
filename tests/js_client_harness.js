@@ -32,10 +32,10 @@ const A = makeClient('A', ()=>({x:ax+=5,y:200}));
 const B = makeClient('B', ()=>null);
 const cfg = n => ({relayURL:'http://127.0.0.1:' + PORT + '/', playerName:n, modVersion:'0.1.0', gameVersion:'1.5.1.7'});
 A.start(cfg('A')); setTimeout(()=>B.start(cfg('B')), 300);
-setTimeout(()=>B.send({type:'hello', payload:{text:'Hello from B'}}), 1500);
+setTimeout(()=>B.sendHello({type:'hello', payload:{text:'Hello from B'}}), 1500);
 setTimeout(() => {
   relay.kill();
-  const expect = ['[A POPUP] Relay reachable', '[B POPUP] Joined co-op session. Other players: A', '[B recv] A pos', '[A recv] B hello {"text":"Hello from B"}', 'WebSocket test: OK'];
+  const expect = ['[A POPUP] Relay reachable', '[B POPUP] Joined co-op session. Other players: A', '[B recv] A pos', '[A recv] B hello {"text":"Hello from B"}', 'WebSocket test: OK', '[B POPUP] Hello sent.'];
   const missing = expect.filter(e => !seen.some(l => l.includes(e)));
   if (missing.length) { console.error('FAIL, missing:', missing); process.exit(1); }
   console.log('PASS'); process.exit(0);
