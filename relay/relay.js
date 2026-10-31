@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.12.0';
+const VERSION = '0.13.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
@@ -222,6 +222,9 @@ function botHear(msg) {
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
+  } else if (msg.type === 'chat' && msg.payload && typeof msg.payload.text === 'string') {
+    const replies = ['Aye.', 'For coin and glory!', `Heard you, ${msg.from}.`, 'Watch the flanks.', 'Bot agrees.'];
+    setTimeout(() => pushMessage(BOT_NAME, 'chat', { text: replies[Math.floor(Math.random() * replies.length)] }), 1200);
   } else if (msg.type === 'hello') {
     setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}! Here are some crowns.` }), 500);
     // a gift, to test receiving a trade offer

@@ -71,6 +71,11 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   await sleep(300);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   check(poll.messages.some((m) => m.type === 'trade_confirm' && m.payload.id === gift.payload.id), 'bot confirms its accepted gift');
+  // chat: the bot answers
+  await send('B', 'chat', { text: 'hello there' });
+  await sleep(1500);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'chat' && m.from === 'Bot' && typeof m.payload.text === 'string'), 'bot answers in chat');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });

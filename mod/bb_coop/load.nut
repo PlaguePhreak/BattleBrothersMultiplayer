@@ -106,3 +106,13 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 	::BBCoop.Connection.openTradeWindow();
 	return true;
 }, "Trade window", null, "Send items, crowns or brothers to another player whose company is next to yours.");
+
+::BBCoop.Mod.Keybinds.addSQKeybind("Chat", "enter", ::MSU.Key.State.World, function() {
+	::BBCoop.Connection.openChat();
+	return true;
+}, "Chat", null, "Open the chat on the world map. Enter sends, Escape closes.");
+
+::BBCoop.Mod.Keybinds.addSQKeybind("ChatInBattle", "ctrl+enter", ::MSU.Key.State.Tactical, function() {
+	::BBCoop.Connection.openChat();
+	return true;
+}, "Chat in battle", null, "Open the chat during a battle (plain Enter ends the turn there).");
