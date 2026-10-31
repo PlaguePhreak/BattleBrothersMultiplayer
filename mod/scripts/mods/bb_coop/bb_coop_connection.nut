@@ -65,7 +65,14 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			local player = ::MSU.Utils.getState("world_state").getPlayer();
 			if (player == null) return null;
 			local pos = player.getPos();
-			return { x = pos.X, y = pos.Y };
+			local brushes = ::BBCoop.Ghosts.getOwnBrushes();
+			return {
+				x = pos.X,
+				y = pos.Y,
+				seed = ::BBCoop.Ghosts.getSeed(),
+				base = brushes.base,
+				body = brushes.body
+			};
 		}
 		catch (error)
 		{
@@ -81,7 +88,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;
 			case "pos":
-				::BBCoop.log(format("%s is at world position (%.0f, %.0f)", _msg.from, _msg.payload.x.tofloat(), _msg.payload.y.tofloat()));
+				::BBCoop.Ghosts.onPosition(_msg.from, _msg.payload);
 				break;
 			case "join":
 				::BBCoop.notify(_msg.from + " joined the session (mod " + _msg.payload.modVersion + ", game " + _msg.payload.gameVersion + ")");

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Battle Brothers Co-op relay. No dependencies: needs only Node.js 16+.
-// Usage: node relay.js [port]        (default port 7777)
+// Usage: node relay.js [port] [--bot]   (default port 7777)
+//   --bot  adds a fake second player ("Bot") whose company circles yours on the
+//          world map and answers hellos, so you can test alone.
 // Both players point the mod's "Relay URL" setting at this machine.
 
 'use strict';
@@ -8,8 +10,10 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const VERSION = '0.1.0';
-const PORT = parseInt(process.argv[2] || process.env.PORT || '7777', 10);
+const VERSION = '0.2.0';
+const args = process.argv.slice(2);
+const BOT = args.includes('--bot');
+const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
 const POLL_HOLD_MS = 8000;      // must stay below the mod's 10s request timeout
 const MAX_MESSAGES = 500;       // keep a short history in memory
 
@@ -61,7 +65,37 @@ function pushMessage(from, type, payload) {
   if (messages.length > MAX_MESSAGES) messages.shift();
   if (type !== 'pos') console.log(`[${new Date().toISOString()}] ${from}: ${type} ${JSON.stringify(payload)}`);
   for (const w of [...waiting]) w.flush();
+  if (BOT && from !== BOT_NAME) botHear(msg);
   return msg;
+}
+
+// ---- fake second player for solo testing ----
+const BOT_NAME = 'Bot';
+const bot = { target: null, seed: '', angle: 0 };
+
+function botHear(msg) {
+  if (msg.type === 'pos' && msg.payload) {
+    bot.target = { x: msg.payload.x, y: msg.payload.y };
+    bot.seed = msg.payload.seed || '';
+  } else if (msg.type === 'hello') {
+    setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}!` }), 500);
+  } else if (msg.type === 'join') {
+    setTimeout(() => pushMessage(BOT_NAME, 'join', { modVersion: 'bot', gameVersion: 'bot' }), 300);
+  }
+}
+
+function botTick() {
+  if (!bot.target) return;
+  touch(BOT_NAME);
+  bot.angle += 0.15;
+  const r = 250;
+  pushMessage(BOT_NAME, 'pos', {
+    x: bot.target.x + Math.cos(bot.angle) * r,
+    y: bot.target.y + Math.sin(bot.angle) * r,
+    seed: bot.seed,
+    base: '',
+    body: 'figure_mercenary_02',
+  });
 }
 
 function messagesSince(since) {
@@ -163,7 +197,10 @@ server.on('upgrade', (req, socket) => {
   socket.on('error', () => {});
 });
 
+if (BOT) setInterval(botTick, 1000);
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Battle Brothers Co-op relay v${VERSION} listening on port ${PORT}`);
   console.log(`Same PC: http://127.0.0.1:${PORT}   Other PC on your network: http://<this PC's IP>:${PORT}`);
+  if (BOT) console.log('Bot player enabled: its company will circle yours once you are on the world map.');
 });
