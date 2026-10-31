@@ -12,9 +12,18 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.8.0';
+const VERSION = '0.9.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
+// --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
+const pwArg = args.find((a) => a.startsWith('--password='));
+const PASSWORD = (pwArg ? pwArg.slice(11) : process.env.BBCOOP_PASSWORD || '').trim();
+function passwordOK(given) {
+  if (!PASSWORD) return true;
+  const a = crypto.createHash('sha256').update(String(given || '')).digest();
+  const b = crypto.createHash('sha256').update(PASSWORD).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
 const POLL_HOLD_MS = 8000;      // must stay below the mod's 10s request timeout
 const MAX_MESSAGES = 500;       // keep a short history in memory
@@ -230,7 +239,12 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && url.pathname === '/ping') {
-      return sendJSON(res, 200, { ok: true, version: VERSION, time: Date.now() });
+      return sendJSON(res, 200, { ok: true, version: VERSION, time: Date.now(), password: !!PASSWORD });
+    }
+
+    // everything except /ping needs the session password, when one is set
+    if (url.pathname !== '/ping' && url.pathname !== '/ws' && !passwordOK(url.searchParams.get('key'))) {
+      return sendJSON(res, 401, { error: 'wrong password' });
     }
 
     if (req.method === 'POST' && url.pathname === '/join') {
@@ -325,5 +339,6 @@ if (BOT) setInterval(botTick, 1000);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Battle Brothers Co-op relay v${VERSION} listening on port ${PORT}`);
   console.log(`Same PC: http://127.0.0.1:${PORT}   Other PC on your network: http://<this PC's IP>:${PORT}`);
+  console.log(PASSWORD ? 'Session password is set: players must enter it in the Multiplayer window or Mod Options.' : 'No session password: anyone who can reach this relay can join.');
   if (BOT) console.log(`Bot player enabled (origin: ${BOT_ORIGINS[botOrigin]}, clan: ${BOT_CLAN}). Its company will circle yours once you are on the world map. Pick an origin with --origin=<${Object.keys(BOT_ORIGINS).join('|')}>`);
 });

@@ -1,6 +1,7 @@
 // Settings shown under Mod Options > Battle Brothers Co-op
 local page = ::BBCoop.Mod.ModSettings.addPage("General");
 page.addStringSetting("RelayURL", "http://127.0.0.1:7777", "Relay URL", "Address of the co-op relay server. Both players must use the same one.");
+page.addStringSetting("SessionPassword", "", "Session password", "Only needed when the host started the relay with a password.");
 page.addStringSetting("PlayerName", "Player", "Player name", "Shown to the other player. Must differ between the two players.");
 local joinRange = page.addRangeSetting("JoinRange", 600, 100, 2000, 50, "Battle join range", "How close (in world units) your company must be to another player's battle to join it as reinforcements.");
 joinRange.addCallback(function( _value ) { ::BBCoop.Battle.JoinRange = _value.tofloat(); });

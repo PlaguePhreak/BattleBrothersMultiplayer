@@ -29,7 +29,7 @@ BBCoopConnection.prototype.log = function (_text)
 // Logs on the Squirrel side and shows an on-screen toast (if enabled in settings)
 BBCoopConnection.prototype.notify = function (_text)
 {
-	if (this.mJoinWaiting && /Could not reach|failed/.test(_text)) this.setJoinStatus(_text, true);
+	if (this.mJoinWaiting && /Could not reach|failed|password/.test(_text)) this.setJoinStatus(_text, true);
 	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onNotify', _text);
 };
 
@@ -73,6 +73,8 @@ BBCoopConnection.prototype.request = function (_method, _path, _body, _callback)
 		try { data = JSON.parse(xhr.responseText); } catch (e) {}
 		_callback(xhr.status, data);
 	};
+	if (_path !== '/ping' && this.mConfig.password)
+		_path += (_path.indexOf('?') === -1 ? '?' : '&') + 'key=' + encodeURIComponent(this.mConfig.password);
 	xhr.open(_method, this.mConfig.relayURL.replace(/\/+$/, '') + _path, true);
 	xhr.timeout = 10000;
 	xhr.ontimeout = function () { if (!done) { done = true; _callback(0, null); } };
@@ -118,6 +120,11 @@ BBCoopConnection.prototype.join = function (_session)
 	}, function (_status, _data)
 	{
 		if (_session !== self.mSessionId) return;
+		if (_status === 401)
+		{
+			self.notify(self.mConfig.password ? 'Wrong session password for this relay.' : 'This relay needs a session password. Enter it in the Multiplayer window or Mod Options.');
+			return;
+		}
 		if (_status !== 200 || _data === null)
 		{
 			self.notify('Joining the relay failed (status ' + _status + ').');
@@ -506,6 +513,8 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 	};
 	var urlInput = field("Host's address (relay)", cfg.relayURL);
 	var nameInput = field('Your name', cfg.playerName);
+	var passwordInput = field('Session password (if the host set one)', cfg.password || '');
+	passwordInput.attr('type', 'password');
 	this.mJoinStatus = $('<div/>').css({ 'min-height': '2.4rem', 'margin-bottom': '1rem' }).appendTo(box);
 	var row = $('<div/>').appendTo(box);
 	var button = function (_label, _onClick)
@@ -527,7 +536,7 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 		}
 		if (name === '') { self.setJoinStatus('Pick a name first.', true); return; }
 		self.setJoinStatus('Connecting to ' + url + '...', false);
-		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: url, playerName: name }, function (_config)
+		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: url, playerName: name, password: passwordInput.val() }, function (_config)
 		{
 			self.mJoinWaiting = true;
 			self.start(_config);
