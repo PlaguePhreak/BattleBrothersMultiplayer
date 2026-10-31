@@ -230,8 +230,12 @@ BBCoopConnection.prototype.sendHostCard = function (_session, _done)
 		};
 		if (_card) self.mLastHostCard = _card;
 		card.password = self.mConfig.password || '';
-		self.request('POST', '/host', card, function (_status)
+		self.request('POST', '/host', card, function (_status, _data)
 		{
+			// a new tunnel run means a new address: tell the host their invite code changed
+			if (_status === 200 && _data && _data.code && self.mInviteCode && _data.code !== self.mInviteCode)
+				self.showToast('Your invite code changed (the tunnel restarted). Press Ctrl+I and send friends the new one.');
+			if (_status === 200 && _data && _data.code) self.mInviteCode = _data.code;
 			if (_status === 200 && !self.mInviteHinted)
 			{
 				self.mInviteHinted = true;
@@ -805,7 +809,7 @@ BBCoopConnection.prototype.openInviteWindow = function ()
 	if (this.mInviteWindow) { this.mInviteWindow.remove(); this.mInviteWindow = null; this.setTyping(false); return; }
 	if (!this.mConfig || !this.mConfig.hosting)
 	{
-		this.notify('Invite codes are for the host: use Multiplayer > Host a world with start-relay.bat running.');
+		this.notify('Invite codes are for the host: use Multiplayer > Host a world with start-host.bat (or start-relay.bat) running.');
 		return;
 	}
 	var w = this.makeWindow('Invite friends', 64);
@@ -826,12 +830,23 @@ BBCoopConnection.prototype.openInviteWindow = function ()
 	{
 		if (_status !== 200 || !_data)
 		{
-			info.text('Your relay did not answer. Is start-relay.bat running?').css('color', '#e07060');
+			info.text('Your relay did not answer. Is start-host.bat (or start-relay.bat) running?').css('color', '#e07060');
 			return;
 		}
 		codeInput.val(_data.code || '');
 		addressInput.val(_data.address || '');
-		info.text(_data.code ? 'Send this code to your friends. They paste it under Multiplayer > Join a world.'
+		if (_data.code) self.mInviteCode = _data.code;
+		if (!_data.code && _data.tunnel === 'starting')
+		{
+			info.text('The free tunnel is starting. Its address arrives in a few seconds...').css('color', '#e0b060');
+			setTimeout(function () { if (self.mInviteWindow) self.request('GET', '/invite', null, show); }, 3000);
+			return;
+		}
+		if (!_data.code && _data.tunnel === 'missing')
+		{
+			info.text('cloudflared was not found next to relay.js. Put cloudflared-windows-amd64.exe in the relay folder, or paste another address below.').css('color', '#e07060');
+		}
+		else info.text(_data.code ? 'Send this code to your friends. They paste it under Multiplayer > Join a world.'
 			: 'No address yet. Paste the address your friends use below and press Enter, or pick one found on this PC.')
 			.css('color', _data.code ? '#9fc08a' : '#e0b060');
 		detectedRow.empty();
@@ -864,7 +879,7 @@ BBCoopConnection.prototype.openMultiplayerWindow = function ()
 	var w = this.makeWindow('Multiplayer', 44);
 	this.mMultiplayerWindow = w.overlay;
 	var close = function () { w.overlay.remove(); self.mMultiplayerWindow = null; };
-	$('<div/>').text('Host a world on this PC (start-relay.bat must be running), or join a friend\'s.').css({ color: '#a89c80', 'margin-bottom': '1.2rem' }).appendTo(w.box);
+	$('<div/>').text('Host a world on this PC (run start-host.bat first), or join a friend\'s.').css({ color: '#a89c80', 'margin-bottom': '1.2rem' }).appendTo(w.box);
 	this.makeButton(w.box, 'Host a world', function () { close(); self.openHostWindow(); });
 	this.makeButton(w.box, 'Join a world', function () { close(); self.openJoinWindow(); });
 	this.makeButton(w.box, 'Cancel', close);
