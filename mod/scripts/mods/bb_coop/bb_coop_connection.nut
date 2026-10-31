@@ -112,6 +112,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
 				break;
+			case "battle_order":
+				::BBCoop.Remote.onOrder(_msg.from, _msg.payload);
+				break;
 			case "battle_result":
 				::BBCoop.Battle.onBattleResult(_msg.from, _msg.payload);
 				break;

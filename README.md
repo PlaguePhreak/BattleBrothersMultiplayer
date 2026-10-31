@@ -4,9 +4,11 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.3.3, shared battles (part 1).** Each player sees the other's company on the world map, and can join the other's battle as reinforcements. For now the host controls the reinforcements; letting each player control their own brothers is next. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.4.0, shared battles.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
 
-## What v0.3.0 does
+## What it does
+
+- **Play your own brothers in someone else's battle:** the host's game runs the battle. When one of your brothers is up, the host's game waits and a battle panel opens on your screen showing the battlefield (yours green, allies blue, enemies red). Click a tile to move, or pick a skill and then a highlighted tile; Wait and End turn work as usual. Between your turns the panel shows whose turn it is. If no order arrives for 90 seconds, the host gets control of that brother for the turn.
 
 - **Join a battle as reinforcements:** when another player's battle starts and your company is within the join range (Mod Options, default 600), you get a notification. Press `Ctrl+B` to send your frontline brothers (up to 12). They arrive on free tiles along the map edge nearest the host's company and fight on the host's side. When the battle ends, each brother comes back to your roster with their new wounds, XP and gear, or is buried with an obituary entry if they fell.
 
@@ -40,7 +42,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 3. Press `Ctrl+J` (or restart) to reconnect with the new settings.
 4. Start campaigns with the same map seed, then press `Ctrl+H`. The other player should get a notification, and each of you should see the other's company on the map.
 
-**Testing alone:** start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos. When you start a battle, Bot joins 3 seconds later as reinforcements, using copies of your own frontline brothers named "Bot's ...".
+**Testing alone:** start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos. When you start a battle, Bot joins 3 seconds later as reinforcements, using copies of your own frontline brothers named "Bot's ...", and plays them itself: it attacks enemies in reach, otherwise steps towards the nearest enemy and ends its turn.
 
 If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothers/log.html`.
 
@@ -52,6 +54,7 @@ If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothe
   - `bb_coop/ghosts.nut`: ghost companies on the world map, map seed tracking
   - `bb_coop/roster.nut`: brothers to network data and back (MSU serialization emulator)
   - `bb_coop/battle.nut`: shared battles: invites, reinforcements at the map edge, results
+  - `bb_coop/remote.nut`: remote turns: battle views for the other player, carrying out their orders
   - `scripts/mods/bb_coop/bb_coop_connection.nut`: Squirrel side of the bridge
   - `ui/mods/bb_coop/bb_coop_connection.js`: network layer (HTTP to the relay)
 - `relay/relay.js`: relay server, no dependencies (`--bot` adds a fake player)
@@ -61,6 +64,6 @@ If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothe
 
 1. **Connection prototype** (done: works in-game, WebSockets supported)
 2. **Ghost companies** (done)
-3. **Fighting together:** part 1, join as reinforcements (this version); part 2, each player controls their own brothers
+3. **Fighting together:** join as reinforcements, each player controls their own brothers (this version)
 4. **Selective world sync:** share chosen world events (destroyed camps, etc.)
 5. **Mod compatibility:** Legends, then others

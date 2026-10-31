@@ -148,6 +148,7 @@ BBCoopConnection.prototype.poll = function (_session)
 			{
 				var msg = _data.messages[i];
 				if (msg.from === self.mConfig.playerName) continue;
+				if (self.handleBattleMessage(msg)) continue;
 				SQ.call(self.mSQHandle, 'onMessage', msg);
 			}
 		}
@@ -213,6 +214,241 @@ BBCoopConnection.prototype.testWebSocket = function ()
 		ws.close();
 	};
 	ws.onerror = function () { clearTimeout(timer); self.log('WebSocket test: error while connecting to ' + url); };
+};
+
+// ---------------------------------------------------------------------------
+// Battle panel (shared battles part 2): when our brothers fight in someone else's
+// battle, the host sends a view of the battlefield on every turn change. On our
+// brothers' turns we pick a skill and a tile here, and the order goes back to the host.
+
+// Returns true when the message was handled here (not passed on to Squirrel)
+BBCoopConnection.prototype.handleBattleMessage = function (_msg)
+{
+	var p = _msg.payload;
+	var forMe = p && typeof p === 'object' && p.to === this.mConfig.playerName;
+	if (_msg.type === 'battle_view')
+	{
+		if (forMe) this.showBattleView(_msg.from, p);
+		return true;
+	}
+	if (_msg.type === 'battle_order_error')
+	{
+		if (forMe) { this.mBattleBusy = false; this.setBattleStatus(p.text, true); this.renderBattleSidebar(); }
+		return true;
+	}
+	if (_msg.type === 'battle_result' && forMe) this.closeBattlePanel();
+	return false;
+};
+
+BBCoopConnection.prototype.showBattleView = function (_host, _view)
+{
+	this.mBattle = { host: _host, view: _view, skill: null };
+	this.mBattleBusy = false;
+	if (this.mBattlePanel === undefined || this.mBattlePanel === null) this.createBattlePanel();
+	if (_view.turn !== null && this.mBattleHidden) this.setBattleHidden(false); // our turn: bring it up
+	this.renderBattleMap();
+	this.renderBattleSidebar();
+	this.setBattleStatus(_view.turn !== null ? 'Your turn: ' + _view.turn.name : 'Waiting for ' + (_view.waitingFor || 'the next turn') + '...', false);
+};
+
+BBCoopConnection.prototype.createBattlePanel = function ()
+{
+	var self = this;
+	var panel = $('<div id="bbcoop-battle"/>').css({
+		position: 'fixed', left: '0', top: '0', right: '0', bottom: '0', 'z-index': 99000,
+		background: 'rgba(10, 8, 5, 0.94)', color: '#e8dcc0', 'font-size': '1.5rem'
+	}).appendTo($('body'));
+	this.mBattleMap = $('<div/>').css({ position: 'absolute', left: '1rem', top: '1rem', bottom: '1rem', right: '36rem' }).appendTo(panel);
+	this.mBattleSide = $('<div class="text-font-normal"/>').css({
+		position: 'absolute', top: '1rem', bottom: '1rem', right: '1rem', width: '33rem',
+		border: '0.1rem solid #8a6d3b', padding: '1rem', background: 'rgba(0,0,0,0.6)', overflow: 'auto'
+	}).appendTo(panel);
+	this.mBattleReopen = $('<div class="text-font-normal">Co-op battle</div>').css({
+		position: 'fixed', left: '2rem', top: '9rem', 'z-index': 99000, display: 'none', cursor: 'pointer',
+		background: 'rgba(0,0,0,0.85)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', 'font-size': '1.6rem'
+	}).appendTo($('body')).click(function () { self.setBattleHidden(false); });
+	this.mBattlePanel = panel;
+	this.mBattleHidden = false;
+};
+
+BBCoopConnection.prototype.setBattleHidden = function (_hidden)
+{
+	this.mBattleHidden = _hidden;
+	this.mBattlePanel.css('display', _hidden ? 'none' : 'block');
+	this.mBattleReopen.css('display', _hidden ? 'block' : 'none');
+};
+
+BBCoopConnection.prototype.closeBattlePanel = function ()
+{
+	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
+	this.mBattlePanel = null;
+	this.mBattle = null;
+};
+
+BBCoopConnection.prototype.setBattleStatus = function (_text, _isError)
+{
+	this.mBattleStatus = { text: _text, error: _isError };
+	if (this.mBattleStatusEl) this.mBattleStatusEl.text(_text).css('color', _isError ? '#e07060' : '#e8dcc0');
+};
+
+BBCoopConnection.prototype.battleTileCenter = function (_x, _y, _s, _oddDown)
+{
+	var shift = (_x % 2 === 1) ? (_oddDown ? 0.5 : -0.5) : 0;
+	var h = Math.sqrt(3) * _s;
+	return { x: _s + _x * 1.5 * _s, y: h / 2 + (_y + shift + (_oddDown ? 0 : 0.5)) * h };
+};
+
+BBCoopConnection.prototype.renderBattleMap = function ()
+{
+	var self = this;
+	var view = this.mBattle.view, map = view.map;
+	var area = this.mBattleMap;
+	area.empty();
+	var w = area.width() || (window.innerWidth * 0.7), h = area.height() || (window.innerHeight * 0.9);
+	var s = Math.min(w / (1.5 * map.w + 0.5), h / (Math.sqrt(3) * (map.h + 0.5)));
+	var d = Math.max(4, Math.floor(s * 1.7));
+
+	var unitAt = {};
+	for (var i = 0; i < view.units.length; i++) unitAt[view.units[i].x + ',' + view.units[i].y] = view.units[i];
+	var targets = {};
+	if (this.mBattle.skill !== null)
+		for (var t = 0; t < this.mBattle.skill.targets.length; t++) targets[this.mBattle.skill.targets[t][0] + ',' + this.mBattle.skill.targets[t][1]] = true;
+
+	var colors = { '.': ['#3e4a2a', '#4d5a33', '#5d6a3c', '#6d7a46'], '-': ['#36566a'], '~': ['#203650'], '#': ['#1c1a17'] };
+	for (var y = 0; y < map.h; y++)
+	{
+		for (var x = 0; x < map.w; x++)
+		{
+			var idx = y * map.w + x;
+			var ch = map.terrain.charAt(idx);
+			if (ch === ' ') continue;
+			var level = parseInt(map.levels.charAt(idx), 10) || 0;
+			var pal = colors[ch] || colors['.'];
+			var c = this.battleTileCenter(x, y, s, map.oddDown);
+			var key = x + ',' + y;
+			var u = unitAt[key];
+			var tile = $('<div/>').css({
+				position: 'absolute', left: (c.x - d / 2) + 'px', top: (c.y - d / 2) + 'px', width: d + 'px', height: d + 'px',
+				'border-radius': '50%', background: pal[Math.min(level, pal.length - 1)], 'box-sizing': 'border-box',
+				border: targets[key] ? '0.25rem solid #f0d060' : '0.1rem solid rgba(0,0,0,0.35)',
+				color: '#fff', 'font-size': Math.max(8, Math.floor(d * 0.32)) + 'px', 'text-align': 'center', 'line-height': d + 'px',
+				overflow: 'hidden', cursor: 'pointer'
+			});
+			if (u)
+			{
+				var unitColor = u.side === 'mine' ? '#3f8f3f' : (u.side === 'ally' ? '#3a6fb0' : '#a83a32');
+				tile.css({ background: unitColor, border: u.active ? '0.3rem solid #ffffff' : (targets[key] ? '0.25rem solid #f0d060' : '0.1rem solid #000') });
+				var initials = u.name.split(' ').map(function (p) { return p.charAt(0); }).join('').substr(0, 2);
+				tile.text(initials);
+			}
+			(function (_x, _y, _u)
+			{
+				tile.click(function () { self.onBattleTileClicked(_x, _y, _u); });
+				tile.mouseenter(function ()
+				{
+					if (self.mBattleHoverEl) self.mBattleHoverEl.text(_u ? _u.name + ' (' + _u.side + '): ' + _u.hp + ' / ' + _u.hpMax + ' HP' : '');
+				});
+			})(x, y, u);
+			area.append(tile);
+		}
+	}
+};
+
+BBCoopConnection.prototype.renderBattleSidebar = function ()
+{
+	var self = this;
+	var side = this.mBattleSide;
+	if (!side || !this.mBattle) return;
+	var view = this.mBattle.view, turn = view.turn;
+	side.empty();
+	$('<div/>').text(this.mBattle.host + "'s battle, round " + view.round).css({ 'font-size': '2rem', color: '#d8b56a', 'margin-bottom': '0.8rem' }).appendTo(side);
+	this.mBattleStatusEl = $('<div/>').css({ 'margin-bottom': '0.8rem', 'min-height': '2rem' }).appendTo(side);
+	if (this.mBattleStatus) this.setBattleStatus(this.mBattleStatus.text, this.mBattleStatus.error);
+
+	var button = function (_label, _enabled, _onClick, _selected)
+	{
+		var b = $('<div/>').text(_label).css({
+			padding: '0.5rem 0.8rem', margin: '0.3rem 0', border: '0.1rem solid ' + (_selected ? '#f0d060' : '#8a6d3b'),
+			background: _selected ? 'rgba(240,208,96,0.2)' : 'rgba(255,255,255,0.05)', color: _enabled ? '#e8dcc0' : '#777',
+			cursor: _enabled ? 'pointer' : 'default'
+		});
+		if (_enabled) b.click(_onClick);
+		return b.appendTo(side);
+	};
+
+	if (turn !== null)
+	{
+		$('<div/>').text(turn.name + ': ' + turn.ap + ' AP, fatigue ' + turn.fatigue + ' / ' + turn.fatigueMax).css('margin-bottom', '0.6rem').appendTo(side);
+		$('<div/>').text('Click a tile to move, or pick a skill and then a highlighted tile.').css({ color: '#a89c80', 'margin-bottom': '0.6rem' }).appendTo(side);
+		for (var i = 0; i < turn.skills.length; i++)
+		{
+			(function (_skill)
+			{
+				var label = _skill.name + ' (' + _skill.ap + ' AP, ' + _skill.fat + ' fat)';
+				var usable = _skill.usable && !self.mBattleBusy && (!_skill.targeted || _skill.targets.length > 0);
+				var selected = self.mBattle.skill !== null && self.mBattle.skill.id === _skill.id;
+				button(label, usable, function () { self.onBattleSkillClicked(_skill); }, selected);
+			})(turn.skills[i]);
+		}
+		$('<div/>').css('height', '0.8rem').appendTo(side);
+		button('Wait (act later this round)', !this.mBattleBusy, function () { self.sendBattleOrder({ action: 'wait' }); });
+		button('End turn', !this.mBattleBusy, function () { self.sendBattleOrder({ action: 'end' }); });
+	}
+	$('<div/>').css('height', '0.8rem').appendTo(side);
+	button('Hide battle', true, function () { self.setBattleHidden(true); });
+	this.mBattleHoverEl = $('<div/>').css({ 'margin-top': '1rem', color: '#a89c80' }).appendTo(side);
+	$('<div/>').html('<span style="color:#3f8f3f">&#9679;</span> yours &nbsp; <span style="color:#3a6fb0">&#9679;</span> allies &nbsp; <span style="color:#a83a32">&#9679;</span> enemies').css('margin-top', '1rem').appendTo(side);
+};
+
+BBCoopConnection.prototype.onBattleSkillClicked = function (_skill)
+{
+	if (!_skill.targeted)
+	{
+		this.sendBattleOrder({ action: 'skill', skill: _skill.id, x: -1, y: -1 });
+		return;
+	}
+	this.mBattle.skill = (this.mBattle.skill !== null && this.mBattle.skill.id === _skill.id) ? null : _skill;
+	this.renderBattleMap();
+	this.renderBattleSidebar();
+};
+
+BBCoopConnection.prototype.onBattleTileClicked = function (_x, _y, _unit)
+{
+	if (!this.mBattle || this.mBattle.view.turn === null || this.mBattleBusy) return;
+	var skill = this.mBattle.skill;
+	if (skill !== null)
+	{
+		for (var i = 0; i < skill.targets.length; i++)
+		{
+			if (skill.targets[i][0] === _x && skill.targets[i][1] === _y)
+			{
+				this.sendBattleOrder({ action: 'skill', skill: skill.id, x: _x, y: _y });
+				return;
+			}
+		}
+		this.setBattleStatus("That tile isn't a valid target for " + skill.name + '.', true);
+		return;
+	}
+	if (_unit) { this.setBattleStatus('Pick a skill first to act on ' + _unit.name + '.', true); return; }
+	this.sendBattleOrder({ action: 'move', x: _x, y: _y });
+};
+
+BBCoopConnection.prototype.sendBattleOrder = function (_order)
+{
+	var self = this;
+	var b = this.mBattle;
+	if (!b || b.view.turn === null) return;
+	_order.to = b.host;
+	_order.battleID = b.view.battleID;
+	_order.key = b.view.turn.key;
+	this.mBattleBusy = true;
+	b.skill = null;
+	this.setBattleStatus('Order sent, waiting for ' + b.host + "'s game...", false);
+	this.renderBattleSidebar();
+	this.send({ type: 'battle_order', payload: _order }, function (_ok)
+	{
+		if (!_ok) { self.mBattleBusy = false; self.setBattleStatus('Sending the order failed. Is the relay running?', true); self.renderBattleSidebar(); }
+	});
 };
 
 registerScreen("BBCoopConnection", new BBCoopConnection());

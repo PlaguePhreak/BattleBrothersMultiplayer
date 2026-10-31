@@ -10,7 +10,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -92,9 +92,70 @@ function botHear(msg) {
   } else if (msg.type === 'battle_result' && msg.payload && msg.payload.to === BOT_NAME) {
     const dead = msg.payload.bros.filter((b) => b.dead).map((b) => b.name);
     console.log(`Bot: battle over, ${msg.payload.bros.length - dead.length} survived, fallen: ${dead.join(', ') || 'none'}`);
+  } else if (msg.type === 'battle_view' && msg.payload && msg.payload.to === BOT_NAME) {
+    botBattleView(msg.from, msg.payload);
+  } else if (msg.type === 'battle_order_error' && msg.payload && msg.payload.to === BOT_NAME) {
+    console.log(`Bot: order refused (${msg.payload.text}), ending the turn`);
+    if (botBattle.view && botBattle.view.turn) botOrder(msg.from, botBattle.view, { action: 'end' });
   } else if (msg.type === 'join') {
     setTimeout(() => pushMessage(BOT_NAME, 'join', { modVersion: 'bot', gameVersion: 'bot' }), 300);
   }
+}
+
+// The bot plays its own brothers in a shared battle: attack an enemy in reach,
+// otherwise step towards the nearest enemy once, then end the turn.
+const botBattle = { view: null, turnId: null, moved: false, steps: 0 };
+
+function hexDistance(map, ax, ay, bx, by) {
+  // square (offset) coordinates to axial, columns offset
+  const toAxial = (x, y) => ({ q: x, r: map.oddDown ? y - (x - (x & 1)) / 2 : y - (x + (x & 1)) / 2 });
+  const a = toAxial(ax, ay), b = toAxial(bx, by);
+  const dq = a.q - b.q, dr = a.r - b.r;
+  return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2;
+}
+
+function botOrder(host, view, order) {
+  const payload = Object.assign({ to: host, battleID: view.battleID, key: view.turn.key }, order);
+  setTimeout(() => pushMessage(BOT_NAME, 'battle_order', payload), 700);
+}
+
+function botBattleView(host, view) {
+  botBattle.view = view;
+  if (!view.turn) return;
+  const t = view.turn, map = view.map;
+  const turnId = `${t.key}@${view.round}`;
+  if (botBattle.turnId !== turnId) Object.assign(botBattle, { turnId, moved: false, steps: 0 });
+  if (++botBattle.steps > 8) return botOrder(host, view, { action: 'end' });
+
+  const enemies = view.units.filter((u) => u.side === 'enemy');
+  const enemyAt = (x, y) => enemies.some((e) => e.x === x && e.y === y);
+  const attack = t.skills.find((s) => s.attack && s.usable && s.targets.some(([x, y]) => enemyAt(x, y)));
+  if (attack) {
+    const [x, y] = attack.targets.find(([tx, ty]) => enemyAt(tx, ty));
+    console.log(`Bot: ${t.name} uses ${attack.name}`);
+    return botOrder(host, view, { action: 'skill', skill: attack.id, x, y });
+  }
+  if (!botBattle.moved && enemies.length) {
+    const nearest = (x, y) => Math.min(...enemies.map((e) => hexDistance(map, x, y, e.x, e.y)));
+    const occupied = new Set(view.units.map((u) => `${u.x},${u.y}`));
+    let best = null, bestScore = nearest(t.x, t.y);
+    for (let y = 0; y < map.h; y++) {
+      for (let x = 0; x < map.w; x++) {
+        const ch = map.terrain[y * map.w + x];
+        if ((ch !== '.' && ch !== '-') || occupied.has(`${x},${y}`)) continue;
+        if (hexDistance(map, t.x, t.y, x, y) > 3) continue;
+        const score = nearest(x, y);
+        if (score < bestScore) { best = { x, y }; bestScore = score; }
+      }
+    }
+    if (best) {
+      botBattle.moved = true;
+      console.log(`Bot: ${t.name} moves to ${best.x},${best.y}`);
+      return botOrder(host, view, { action: 'move', x: best.x, y: best.y });
+    }
+  }
+  console.log(`Bot: ${t.name} ends the turn`);
+  botOrder(host, view, { action: 'end' });
 }
 
 function botTick() {

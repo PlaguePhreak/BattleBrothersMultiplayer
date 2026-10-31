@@ -3,7 +3,7 @@
 // Ally: a player whose company is close enough can join. Their brothers arrive at the map edge
 // as reinforcements in the host's battle. When it ends, each brother's new state (or death)
 // is sent back and replaces the original in the ally's roster.
-// For now the host controls the reinforcements; remote control comes in part 2.
+// Each player plays their own brothers through remote.nut (part 2).
 // Checked against the decompiled vanilla scripts (tactical_entity_manager, tactical_state, player).
 
 ::BBCoop.Battle <- {
@@ -37,6 +37,7 @@
 		this.HostBattleID = ::BBCoop.getSetting("PlayerName") + "_" + ::Time.getRealTime();
 		this.Reinforcements.clear();
 		this.JoinedOwners.clear();
+		::BBCoop.Remote.reset();
 
 		local pos = null;
 		try
@@ -71,7 +72,10 @@
 		this.JoinedOwners[_from] <- true;
 
 		local spawned = this.spawnReinforcements(_from, _payload.bros);
-		::BBCoop.notify(format("%s's company arrives as reinforcements (%i brothers)!", _from, spawned));
+		::BBCoop.notify(format("%s's company arrives as reinforcements (%i brothers)! %s plays them.", _from, spawned, _from));
+		local active = null;
+		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+		::BBCoop.Remote.sendView(_from, active);
 	}
 
 	function spawnReinforcements( _owner, _bros )
@@ -92,6 +96,7 @@
 				if ("look" in entry) ::BBCoop.Roster.applyAppearance(bro, entry.look);
 				bro.setName(entry.name);
 				bro.getFlags().set("BBCoopOwner", _owner);
+				bro.getFlags().set("BBCoopKey", entry.key);
 				// Guests are player-controlled but stay out of our roster, obituary, score and result screen
 				bro.setGuest(true);
 				bro.setFaction(::Const.Faction.Player);
@@ -163,6 +168,7 @@
 		if (this.HostBattleID == null) return;
 		local battleID = this.HostBattleID;
 		this.HostBattleID = null;
+		::BBCoop.Remote.reset();
 
 		local byOwner = {};
 		foreach (r in this.Reinforcements)
