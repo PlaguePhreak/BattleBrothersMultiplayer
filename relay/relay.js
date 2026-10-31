@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.14.0';
+const VERSION = '0.15.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
