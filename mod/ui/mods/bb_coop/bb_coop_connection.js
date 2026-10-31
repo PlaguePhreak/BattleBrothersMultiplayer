@@ -232,6 +232,11 @@ BBCoopConnection.prototype.sendHostCard = function (_session, _done)
 		card.password = self.mConfig.password || '';
 		self.request('POST', '/host', card, function (_status)
 		{
+			if (_status === 200 && !self.mInviteHinted)
+			{
+				self.mInviteHinted = true;
+				self.showToast('Hosting. Press Ctrl+I on the world map for the invite code to send your friends.');
+			}
 			if (_status !== 200 && !self.mHostCardFailed)
 			{
 				self.mHostCardFailed = true;
@@ -552,69 +557,303 @@ BBCoopConnection.prototype.sendBattleOrder = function (_order)
 // Joining another player's world: Multiplayer button on the main menu, join window,
 // and the host's map seed filled into the new campaign screen.
 
+// ---- invite codes and saved hosts (v0.16.0) ----
+// An invite code is "BB1-" + base64url(encodeURIComponent(address) + "|" + encodeURIComponent(host)).
+// A plain address works too ("100.1.2.3" gets http:// and the relay's port 7777).
+var BBCOOP_B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+BBCoopConnection.prototype.decodeBase64Url = function (_text)
+{
+	var out = '', bits = 0, value = 0;
+	for (var i = 0; i < _text.length; i++)
+	{
+		var v = BBCOOP_B64.indexOf(_text.charAt(i));
+		if (v === -1) return null;
+		value = (value << 6) | v;
+		bits += 6;
+		if (bits >= 8) { bits -= 8; out += String.fromCharCode((value >> bits) & 0xff); }
+	}
+	return out;
+};
+
+BBCoopConnection.prototype.normalizeAddress = function (_address)
+{
+	var url = $.trim(_address || '').replace(/\/+$/, '');
+	if (url === '') return '';
+	if (url.indexOf('://') === -1)
+	{
+		url = 'http://' + url;
+		if (!/:\d+$/.test(url)) url += ':7777';
+	}
+	return url;
+};
+
+// returns { url, host } or null when the text is neither a code nor an address
+BBCoopConnection.prototype.parseInvite = function (_text)
+{
+	var text = $.trim(_text || '');
+	if (text === '') return null;
+	if (/^BB1-/i.test(text))
+	{
+		var raw = this.decodeBase64Url(text.substr(4));
+		if (raw === null || raw.indexOf('|') === -1) return null;
+		try
+		{
+			var parts = raw.split('|');
+			var url = this.normalizeAddress(decodeURIComponent(parts[0]));
+			return url === '' ? null : { url: url, host: decodeURIComponent(parts[1] || '') };
+		}
+		catch (e) { return null; }
+	}
+	if (/\s/.test(text)) return null;
+	return { url: this.normalizeAddress(text), host: '' };
+};
+
+// Saved hosts live in the SavedHosts setting: entries joined by "|", each "host~url" (both URI-encoded)
+BBCoopConnection.prototype.getSavedHosts = function ()
+{
+	var text = (this.mConfig && this.mConfig.savedHosts) || '', list = [];
+	if (text === '') return list;
+	var entries = text.split('|');
+	for (var i = 0; i < entries.length; i++)
+	{
+		var f = entries[i].split('~');
+		try { if (f.length === 2 && f[1] !== '') list.push({ host: decodeURIComponent(f[0]), url: decodeURIComponent(f[1]) }); } catch (e) {}
+	}
+	return list;
+};
+
+BBCoopConnection.prototype.setSavedHosts = function (_list)
+{
+	var parts = [];
+	for (var i = 0; i < _list.length && i < 30; i++)
+		parts.push(encodeURIComponent(_list[i].host || '') + '~' + encodeURIComponent(_list[i].url));
+	var text = parts.join('|');
+	if (this.mConfig) this.mConfig.savedHosts = text;
+	if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'setSavedHosts', text);
+};
+
+// Adds a host or updates it: same name (a tunnel host's new address) or same address is the same entry
+BBCoopConnection.prototype.rememberHost = function (_url, _host)
+{
+	var list = this.getSavedHosts(), entry = null;
+	for (var i = 0; i < list.length; i++)
+	{
+		if ((_host && list[i].host === _host) || list[i].url === _url) { entry = list.splice(i, 1)[0]; break; }
+	}
+	entry = entry || { host: '', url: _url };
+	entry.url = _url;
+	if (_host) entry.host = _host;
+	list.unshift(entry); // newest first
+	// another entry with the same address is now a duplicate
+	for (var j = list.length - 1; j > 0; j--) if (list[j].url === _url) list.splice(j, 1);
+	this.setSavedHosts(list);
+	return entry;
+};
+
+BBCoopConnection.prototype.forgetHost = function (_url)
+{
+	var list = this.getSavedHosts();
+	for (var i = list.length - 1; i >= 0; i--) if (list[i].url === _url) list.splice(i, 1);
+	this.setSavedHosts(list);
+};
+
+// GET <url>/ping with its own short timeout; _callback(data or null, ms)
+BBCoopConnection.prototype.pingAddress = function (_url, _callback)
+{
+	var xhr = new XMLHttpRequest(), done = false, started = new Date().getTime();
+	var finish = function (_data) { if (done) return; done = true; _callback(_data, new Date().getTime() - started); };
+	xhr.onreadystatechange = function ()
+	{
+		if (xhr.readyState !== 4) return;
+		var data = null;
+		if (xhr.status === 200) { try { data = JSON.parse(xhr.responseText); } catch (e) {} }
+		finish(data);
+	};
+	try
+	{
+		xhr.open('GET', _url.replace(/\/+$/, '') + '/ping', true);
+		xhr.timeout = 5000;
+		xhr.ontimeout = function () { finish(null); };
+		xhr.send(null);
+	}
+	catch (e) { finish(null); }
+};
+
+// Why this player can't join a host, from its /ping answer, or null
+BBCoopConnection.prototype.joinProblem = function (_ping)
+{
+	var cfg = this.mConfig || {};
+	if (_ping.protocol !== undefined && cfg.protocol !== undefined && _ping.protocol !== cfg.protocol)
+		return 'Needs a different co-op version (host has ' + ((_ping.session && _ping.session.modVersion) || _ping.version) + ', you have ' + cfg.modVersion + ')';
+	var c = _ping.session;
+	if (c && c.dlcs && cfg.dlcs && c.dlcs.join(', ') !== cfg.dlcs.join(', '))
+		return 'Different DLCs (host: ' + (c.dlcs.join(', ') || 'none') + ')';
+	if (_ping.max && _ping.players >= _ping.max) return 'Full (' + _ping.players + ' / ' + _ping.max + ')';
+	return null;
+};
+
+// Join window: your saved hosts, checked live, plus adding one by invite code or address
 BBCoopConnection.prototype.openJoinWindow = function ()
 {
 	var self = this;
 	if (this.mJoinWindow) return;
-	var cfg = this.mConfig || { relayURL: 'http://127.0.0.1:7777', playerName: 'Player' };
-	var overlay = $('<div class="text-font-normal"/>').css({
-		position: 'fixed', left: '0', top: '0', right: '0', bottom: '0', 'z-index': 99500,
-		background: 'rgba(0,0,0,0.7)', color: '#e8dcc0', 'font-size': '1.7rem'
-	}).appendTo($('body'));
-	var box = $('<div/>').css({
-		position: 'absolute', left: '50%', top: '30%', width: '56rem', 'margin-left': '-28rem',
-		background: 'rgba(20,16,10,0.97)', border: '0.2rem solid #8a6d3b', padding: '2rem'
-	}).appendTo(overlay);
-	$('<div/>').text('Multiplayer: join a world').css({ 'font-size': '2.4rem', color: '#d8b56a', 'margin-bottom': '1.4rem' }).appendTo(box);
-	var field = function (_label, _value)
-	{
-		$('<div/>').text(_label).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box);
-		return self.makeInput(box, _value, '100%', function () { connect(); }, function () { self.closeJoinWindow(); }).css('margin-bottom', '1.2rem');
-	};
-	// the address starts empty: paste the one your host sent, or rejoin the last world you joined
-	var urlInput = field("Host's address (relay or tunnel URL)", '');
-	var nameInput = field('Your name', cfg.playerName);
-	var passwordInput = field('Session password (if the host set one)', cfg.password || '');
+	var cfg = this.mConfig || { playerName: 'Player' };
+	var w = this.makeWindow('Multiplayer: join a world', 64);
+	w.box.css({ top: '12%' });
+	var overlay = w.overlay, box = w.box;
+	this.mJoinWindow = overlay;
+	var label = function (_text) { return $('<div/>').text(_text).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box); };
+
+	label('Your name');
+	var nameInput = this.makeInput(box, cfg.playerName, '100%', null, function () { self.closeJoinWindow(); }).css('margin-bottom', '1rem');
+	label('Session password (if the host set one)');
+	var passwordInput = this.makeInput(box, cfg.password || '', '100%', null, function () { self.closeJoinWindow(); }).css('margin-bottom', '1.2rem');
 	passwordInput.attr('type', 'password');
-	this.mJoinStatus = $('<div/>').css({ 'min-height': '2.4rem', 'margin-bottom': '1rem' }).appendTo(box);
+
+	label('Your hosts');
+	var listBox = $('<div/>').css({ 'max-height': '28rem', 'overflow-y': 'auto', 'margin-bottom': '1rem', border: '0.1rem solid #4a3c22' }).appendTo(box);
+
+	label('Add a host: paste their invite code or address');
+	var addRow = $('<div/>').css('margin-bottom', '0.6rem').appendTo(box);
+	var addInput = this.makeInput(addRow, '', '44rem', function () { add(); }, function () { self.closeJoinWindow(); });
+	this.makeButton(addRow, 'Add', function () { add(); }).css('margin-left', '1rem');
+
+	this.mJoinStatus = $('<div/>').css({ 'min-height': '2.4rem', 'margin-bottom': '0.6rem' }).appendTo(box);
 	var row = $('<div/>').appendTo(box);
-	var button = function (_label, _onClick)
+
+	var connect = function (_url)
 	{
-		return $('<div/>').text(_label).css({
-			display: 'inline-block', padding: '0.6rem 1.6rem', 'margin-right': '1rem', cursor: 'pointer',
-			border: '0.1rem solid #8a6d3b', background: 'rgba(255,255,255,0.06)'
-		}).click(_onClick).appendTo(row);
-	};
-	var connect = function ()
-	{
-		var url = $.trim(urlInput.val()), name = $.trim(nameInput.val());
-		if (url === '') { self.setJoinStatus("Enter the host's address, or use Rejoin last server.", true); return; }
-		// a bare address ("100.1.2.3") gets the relay's default port; a full URL
-		// (e.g. an https tunnel address) is used exactly as typed
-		if (url.indexOf('://') === -1)
-		{
-			url = 'http://' + url.replace(/\/+$/, '');
-			if (!/:\d+$/.test(url)) url += ':7777';
-		}
+		var name = $.trim(nameInput.val());
+		if (!_url) { self.setJoinStatus('Pick a host first.', true); return; }
 		if (name === '') { self.setJoinStatus('Pick a name first.', true); return; }
-		self.setJoinStatus('Connecting to ' + url + '...', false);
-		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: url, playerName: name, password: passwordInput.val() }, function (_config)
+		self.setJoinStatus('Connecting to ' + _url + '...', false);
+		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: _url, playerName: name, password: passwordInput.val() }, function (_config)
 		{
 			self.mJoinWaiting = true;
 			self.start(_config);
 		});
 	};
-	button('Connect', connect);
+
+	var render = function ()
+	{
+		listBox.empty();
+		var hosts = self.getSavedHosts();
+		if (hosts.length === 0)
+		{
+			$('<div/>').text('No hosts yet. Ask your host for their invite code (they press Ctrl+I) and paste it below.')
+				.css({ padding: '1rem', color: '#a89c80' }).appendTo(listBox);
+			return;
+		}
+		for (var i = 0; i < hosts.length; i++) (function (_h)
+		{
+			var entry = $('<div/>').css({ padding: '0.8rem 1rem', 'border-bottom': '0.1rem solid #3a2f1a', position: 'relative' }).appendTo(listBox);
+			var title = $('<div/>').text(_h.host || _h.url).css({ color: '#f0e6cc', 'font-size': '1.8rem' }).appendTo(entry);
+			var status = $('<div/>').text('Checking...').css({ color: '#a89c80', 'font-size': '1.45rem', 'margin-right': '20rem' }).appendTo(entry);
+			var buttons = $('<div/>').css({ position: 'absolute', right: '0.6rem', top: '0.8rem' }).appendTo(entry);
+			var joinButton = self.makeButton(buttons, 'Join', function () { connect(_h.url); });
+			self.makeButton(buttons, 'Remove', function () { self.forgetHost(_h.url); render(); });
+			self.pingAddress(_h.url, function (_ping, _ms)
+			{
+				if (!self.mJoinWindow) return;
+				if (_ping === null)
+				{
+					status.text('Offline (no answer from ' + _h.url + ')').css('color', '#a07060');
+					joinButton.css('opacity', '0.5');
+					return;
+				}
+				var c = _ping.session;
+				// the relay says whose it is: keep the saved name up to date
+				if (c && c.host && c.host !== _h.host) { self.rememberHost(_h.url, c.host); title.text(c.host); }
+				var parts = [];
+				if (c) parts.push(c.name + (c.day ? ', day ' + c.day : ''));
+				else parts.push('Relay online, host not in a world yet');
+				parts.push(_ping.players + ' / ' + _ping.max + ' players');
+				if (_ping.password) parts.push('password');
+				parts.push(_ms + ' ms');
+				var problem = self.joinProblem(_ping);
+				status.text((problem ? problem + '. ' : 'Online: ') + parts.join(', ')).css('color', problem ? '#e07060' : '#9fc08a');
+				if (problem) joinButton.css('opacity', '0.5');
+			});
+		})(hosts[i]);
+	};
+
+	var add = function ()
+	{
+		var invite = self.parseInvite(addInput.val());
+		if (invite === null) { self.setJoinStatus('That is not an invite code or an address.', true); return; }
+		self.rememberHost(invite.url, invite.host);
+		addInput.val('');
+		self.setJoinStatus('Added ' + (invite.host || invite.url) + '.', false);
+		render();
+	};
+
 	if (cfg.lastServerURL)
 	{
-		button('Rejoin last server', function () { urlInput.val(cfg.lastServerURL); connect(); })
+		this.makeButton(row, 'Rejoin last server', function () { connect(cfg.lastServerURL); })
 			.attr('title', (cfg.lastServerHost ? cfg.lastServerHost + ': ' : '') + cfg.lastServerURL);
 	}
-	button('Cancel', function () { self.closeJoinWindow(); });
-	if (cfg.lastServerURL)
-		$('<div/>').text('Last server: ' + (cfg.lastServerHost ? cfg.lastServerHost + ', ' : '') + cfg.lastServerURL)
-			.css({ color: '#a89c80', 'margin-top': '0.8rem', 'font-size': '1.4rem' }).appendTo(box);
-	this.mJoinWindow = overlay;
+	this.makeButton(row, 'Refresh', render);
+	this.makeButton(row, 'Cancel', function () { self.closeJoinWindow(); });
+	render();
+};
+
+// Host: Ctrl+I shows the invite code to send to friends
+BBCoopConnection.prototype.openInviteWindow = function ()
+{
+	var self = this;
+	if (this.mInviteWindow) { this.mInviteWindow.remove(); this.mInviteWindow = null; this.setTyping(false); return; }
+	if (!this.mConfig || !this.mConfig.hosting)
+	{
+		this.notify('Invite codes are for the host: use Multiplayer > Host a world with start-relay.bat running.');
+		return;
+	}
+	var w = this.makeWindow('Invite friends', 64);
+	this.mInviteWindow = w.overlay;
+	var box = w.box;
+	var close = function () { if (self.mInviteWindow) self.mInviteWindow.remove(); self.mInviteWindow = null; self.setTyping(false); };
+	var info = $('<div/>').text('Asking your relay...').css({ color: '#a89c80', 'margin-bottom': '1rem' }).appendTo(box);
+	$('<div/>').text('Invite code (select it and press Ctrl+C, or use Copy)').css({ color: '#a89c80', 'margin-bottom': '0.4rem' }).appendTo(box);
+	var codeInput = this.makeInput(box, '', '100%', null, close).css('margin-bottom', '1rem');
+	codeInput.attr('readonly', 'readonly');
+	$('<div/>').text('Address friends use (tunnel URL, Tailscale or your public IP)').css({ color: '#a89c80', 'margin-bottom': '0.4rem' }).appendTo(box);
+	var addressInput = this.makeInput(box, '', '100%', function () { setAddress(addressInput.val()); }, close).css('margin-bottom', '0.6rem');
+	var detectedRow = $('<div/>').css('margin-bottom', '1rem').appendTo(box);
+	var status = $('<div/>').css({ 'min-height': '2.2rem', 'margin-bottom': '0.6rem' }).appendTo(box);
+	var row = $('<div/>').appendTo(box);
+
+	var show = function (_status, _data)
+	{
+		if (_status !== 200 || !_data)
+		{
+			info.text('Your relay did not answer. Is start-relay.bat running?').css('color', '#e07060');
+			return;
+		}
+		codeInput.val(_data.code || '');
+		addressInput.val(_data.address || '');
+		info.text(_data.code ? 'Send this code to your friends. They paste it under Multiplayer > Join a world.'
+			: 'No address yet. Paste the address your friends use below and press Enter, or pick one found on this PC.')
+			.css('color', _data.code ? '#9fc08a' : '#e0b060');
+		detectedRow.empty();
+		for (var i = 0; i < (_data.detected || []).length; i++) (function (_d)
+		{
+			self.makeButton(detectedRow, 'Use ' + _d.kind + ' (' + _d.url + ')', function () { setAddress(_d.url); });
+		})(_data.detected[i]);
+	};
+	var setAddress = function (_address)
+	{
+		self.request('POST', '/address', { address: _address }, show);
+	};
+	this.makeButton(row, 'Copy', function ()
+	{
+		codeInput.removeAttr('readonly').focus().select();
+		var ok = false;
+		try { ok = document.execCommand('copy'); } catch (e) {}
+		codeInput.attr('readonly', 'readonly');
+		status.text(ok ? 'Copied.' : 'Select the code and press Ctrl+C.');
+	});
+	this.makeButton(row, 'Close', close);
+	this.request('GET', '/invite', null, show);
 };
 
 // Multiplayer button: host a world or join one
@@ -733,6 +972,7 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	SQ.call(this.mSQHandle, 'setLastServer', { url: this.mConfig.relayURL, host: _from });
 	this.mConfig.lastServerURL = this.mConfig.relayURL;
 	this.mConfig.lastServerHost = _from;
+	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	this.showToast('Joining ' + _from + "'s world. Pick your origin; the map seed is set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);

@@ -30,7 +30,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			sessionName = ::BBCoop.getSetting("HostSessionName"),
 			lastServerURL = ::BBCoop.getSetting("LastServerURL"),
 			lastServerHost = ::BBCoop.getSetting("LastServerHost"),
-			coopSaves = ::BBCoop.getCoopSaves()
+			coopSaves = ::BBCoop.getCoopSaves(),
+			savedHosts = ::BBCoop.getSetting("SavedHosts")
 		};
 	}
 
@@ -222,6 +223,18 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	function openChat()
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("openChat", null);
+	}
+
+	function openInviteWindow()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("openInviteWindow", null);
+	}
+
+	// JS keeps the join list; Squirrel only stores it
+	function setSavedHosts( _text )
+	{
+		try { ::BBCoop.Mod.ModSettings.getSetting("SavedHosts").set(_text); }
+		catch (error) { ::BBCoop.log("Could not save the host list: " + error); }
 	}
 
 	function openClanWindow()

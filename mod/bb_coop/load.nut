@@ -10,6 +10,7 @@ page.addStringSetting("HostSessionName", "", "Session name (hosting)", "Name of 
 page.addRangeSetting("HostMaxPlayers", 8, 2, 8, 1, "Max players (hosting)", "How many players can be in a session you host, you included.");
 page.addStringSetting("LastServerURL", "", "Last server", "Address of the last world you joined; the join window's Rejoin last server button uses it.");
 page.addStringSetting("LastServerHost", "", "Last server's host", "Who hosted the last world you joined.");
+page.addStringSetting("SavedHosts", "", "Saved hosts", "Hosts in your join list (added by invite code or by joining). Filled in automatically.");
 page.addStringSetting("CoopSaves", "", "Co-op saves", "Save files used in multiplayer, marked Co-op in the Load screen. Filled in automatically.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 
@@ -188,6 +189,11 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 	::BBCoop.Connection.openClanWindow();
 	return true;
 }, "Clan window", null, "Create, join or leave a clan. Clanmates always fight on the same side.");
+
+::BBCoop.Mod.Keybinds.addSQKeybind("InviteWindow", "ctrl+i", ::MSU.Key.State.All, function() {
+	::BBCoop.Connection.openInviteWindow();
+	return true;
+}, "Invite code", null, "Host: show the invite code to send your friends.");
 
 ::BBCoop.Mod.Keybinds.addSQKeybind("TradeWindow", "ctrl+t", ::MSU.Key.State.World, function() {
 	::BBCoop.Connection.openTradeWindow();
