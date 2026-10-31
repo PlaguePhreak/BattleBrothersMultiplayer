@@ -27,7 +27,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			protocol = ::BBCoop.Protocol,
 			hosting = this.isHosting(),
 			maxPlayers = ::BBCoop.getSetting("HostMaxPlayers").tointeger(),
-			sessionName = ::BBCoop.getSetting("HostSessionName")
+			sessionName = ::BBCoop.getSetting("HostSessionName"),
+			lastServerURL = ::BBCoop.getSetting("LastServerURL"),
+			lastServerHost = ::BBCoop.getSetting("LastServerHost")
 		};
 	}
 
@@ -92,6 +94,20 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			::BBCoop.log("Could not save the join settings: " + error);
 		}
 		return this.getConfig();
+	}
+
+	// A join worked: remember the address for the join window's "Rejoin last server" button
+	function setLastServer( _data )
+	{
+		try
+		{
+			::BBCoop.Mod.ModSettings.getSetting("LastServerURL").set(_data.url);
+			::BBCoop.Mod.ModSettings.getSetting("LastServerHost").set(_data.host);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not save the last server: " + error);
+		}
 	}
 
 	// Host window: save the host's choices; the relay runs on this PC

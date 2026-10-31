@@ -9,6 +9,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 ## What it does
 
 - **Host a world (v0.14.0):** Multiplayer on the main menu now asks whether to host or join. **Host a world** (with `start-relay.bat` running on this PC) asks for your name, a session name, an optional password and how many players may join (2 to 8, you included), then opens **New campaign** or **Load a save**: the host picks the world. Your game describes the session to its relay (name, company, day, players, versions, DLCs); anyone can see that on the relay's `/ping` without the password, which the coming session list uses. The relay turns away players past your limit ("session full") and games with an incompatible co-op version. A password typed in the Host window replaces the one `start-relay.bat` asked for. Both are also under Mod Options. All co-op players need v0.14.0.
+- **Join window (v0.14.0):** the host's address starts empty; paste the one your host sent. **Rejoin last server** connects to the last world you joined (its host and address are shown under the buttons).
 
 - **Text chat (v0.13.0):** press `Enter` on the world map (`Ctrl+Enter` in battle, where Enter ends the turn) to open a chat line bottom left. Enter sends, Escape closes. New messages show for 20 seconds; opening the chat shows the last 30. Game hotkeys are off while typing. Chat is also written to `log.html`. Both keys can be changed under Mod Options > Keybinds.
 

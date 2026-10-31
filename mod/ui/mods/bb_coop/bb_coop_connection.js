@@ -571,7 +571,8 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 		$('<div/>').text(_label).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box);
 		return self.makeInput(box, _value, '100%', function () { connect(); }, function () { self.closeJoinWindow(); }).css('margin-bottom', '1.2rem');
 	};
-	var urlInput = field("Host's address (relay)", cfg.relayURL);
+	// the address starts empty: paste the one your host sent, or rejoin the last world you joined
+	var urlInput = field("Host's address (relay or tunnel URL)", '');
 	var nameInput = field('Your name', cfg.playerName);
 	var passwordInput = field('Session password (if the host set one)', cfg.password || '');
 	passwordInput.attr('type', 'password');
@@ -587,6 +588,7 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 	var connect = function ()
 	{
 		var url = $.trim(urlInput.val()), name = $.trim(nameInput.val());
+		if (url === '') { self.setJoinStatus("Enter the host's address, or use Rejoin last server.", true); return; }
 		// a bare address ("100.1.2.3") gets the relay's default port; a full URL
 		// (e.g. an https tunnel address) is used exactly as typed
 		if (url.indexOf('://') === -1)
@@ -603,7 +605,15 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 		});
 	};
 	button('Connect', connect);
+	if (cfg.lastServerURL)
+	{
+		button('Rejoin last server', function () { urlInput.val(cfg.lastServerURL); connect(); })
+			.attr('title', (cfg.lastServerHost ? cfg.lastServerHost + ': ' : '') + cfg.lastServerURL);
+	}
 	button('Cancel', function () { self.closeJoinWindow(); });
+	if (cfg.lastServerURL)
+		$('<div/>').text('Last server: ' + (cfg.lastServerHost ? cfg.lastServerHost + ', ' : '') + cfg.lastServerURL)
+			.css({ color: '#a89c80', 'margin-top': '0.8rem', 'font-size': '1.4rem' }).appendTo(box);
 	this.mJoinWindow = overlay;
 };
 
@@ -720,6 +730,9 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 		}
 	}
 	this.closeJoinWindow();
+	SQ.call(this.mSQHandle, 'setLastServer', { url: this.mConfig.relayURL, host: _from });
+	this.mConfig.lastServerURL = this.mConfig.relayURL;
+	this.mConfig.lastServerHost = _from;
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	this.showToast('Joining ' + _from + "'s world. Pick your origin; the map seed is set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
