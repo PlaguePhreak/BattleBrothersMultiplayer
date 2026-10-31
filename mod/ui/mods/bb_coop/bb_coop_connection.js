@@ -257,6 +257,11 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 {
 	var p = _msg.payload;
 	var forMe = p && typeof p === 'object' && p.to === this.mConfig.playerName;
+	if (_msg.type === 'chat')
+	{
+		if (p && typeof p.text === 'string') this.addChatLine(_msg.from, p.text);
+		return true;
+	}
 	if (_msg.type === 'battle_view')
 	{
 		if (forMe) this.showBattleView(_msg.from, p);
@@ -876,6 +881,84 @@ BBCoopConnection.prototype.closeTradeWindow = function ()
 	if (this.mTradeWindow) this.mTradeWindow.remove();
 	this.mTradeWindow = null;
 	this.setTyping(false);
+};
+
+// ---------------------------------------------------------------------------
+// Text chat: Enter on the world map (Ctrl+Enter in battle) opens a line to type in.
+// Messages show bottom left and fade after a while; open the chat to see the history.
+
+BBCoopConnection.prototype.ensureChat = function ()
+{
+	if (this.mChat) return this.mChat;
+	var box = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '2rem', bottom: '16rem', width: '56rem', 'z-index': 99000,
+		color: '#e8dcc0', 'font-size': '1.7rem', 'pointer-events': 'none'
+	}).appendTo($('body'));
+	var log = $('<div/>').css({ 'max-height': '30rem', overflow: 'hidden', padding: '0.4rem 0.8rem' }).appendTo(box);
+	this.mChat = { box: box, log: log, input: null, open: false, closedAt: 0, lines: [] };
+	return this.mChat;
+};
+
+BBCoopConnection.prototype.addChatLine = function (_from, _text)
+{
+	var chat = this.ensureChat();
+	var line = $('<div/>').css({ 'margin-bottom': '0.2rem', 'text-shadow': '0.1rem 0.1rem 0.2rem #000', 'word-wrap': 'break-word' });
+	$('<span/>').text(_from + ': ').css({ color: _from === (this.mConfig && this.mConfig.playerName) ? '#9fc5e8' : '#d8b56a' }).appendTo(line);
+	$('<span/>').text(_text).appendTo(line);
+	line.appendTo(chat.log);
+	chat.lines.push(line);
+	while (chat.lines.length > 30) chat.lines.shift().remove();
+	chat.log.scrollTop(chat.log[0].scrollHeight);
+	this.log('Chat ' + _from + ': ' + _text);
+	if (!chat.open)
+	{
+		setTimeout(function () { if (!chat.open) line.fadeOut(800); }, 20000);
+	}
+};
+
+BBCoopConnection.prototype.openChat = function ()
+{
+	var self = this;
+	var chat = this.ensureChat();
+	if (chat.open) { chat.input.focus(); return; }
+	// the Enter that just sent a message must not open the chat again
+	if (new Date().getTime() - chat.closedAt < 500) return;
+	chat.open = true;
+	chat.box.css({ 'pointer-events': 'auto' });
+	chat.log.css({ background: 'rgba(0,0,0,0.6)', 'overflow-y': 'auto' });
+	for (var i = 0; i < chat.lines.length; i++) chat.lines[i].stop(true, true).show();
+	chat.log.scrollTop(chat.log[0].scrollHeight);
+	var send = function ()
+	{
+		var text = $.trim(chat.input.val()).substring(0, 200);
+		if (text !== '' && self.mConfig)
+		{
+			self.send({ type: 'chat', payload: { text: text } });
+			self.addChatLine(self.mConfig.playerName, text);
+		}
+		else if (!self.mConfig) self.showToast('Not connected to the relay.');
+		self.closeChat();
+	};
+	chat.input = this.makeInput(chat.box, '', '100%', send, function () { self.closeChat(); }).attr('maxlength', 200).attr('placeholder', 'Say something (Enter to send, Escape to close)');
+	chat.input.focus();
+};
+
+BBCoopConnection.prototype.closeChat = function ()
+{
+	var chat = this.mChat;
+	if (!chat || !chat.open) return;
+	chat.open = false;
+	chat.closedAt = new Date().getTime();
+	if (chat.input) chat.input.remove();
+	chat.input = null;
+	this.setTyping(false);
+	chat.box.css({ 'pointer-events': 'none' });
+	chat.log.css({ background: 'transparent', 'overflow-y': 'hidden' });
+	// older lines disappear again; the newest ones fade a bit later
+	for (var i = 0; i < chat.lines.length; i++)
+	{
+		(function (_line, _delay) { setTimeout(function () { if (!chat.open) _line.fadeOut(800); }, _delay); })(chat.lines[i], i >= chat.lines.length - 3 ? 8000 : 0);
+	}
 };
 
 window.BBCoopScreen = new BBCoopConnection();

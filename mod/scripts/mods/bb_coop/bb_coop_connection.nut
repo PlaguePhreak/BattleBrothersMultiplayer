@@ -129,6 +129,11 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		}
 	}
 
+	function openChat()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("openChat", null);
+	}
+
 	function openClanWindow()
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("openClanWindow", ::BBCoop.getClan());
