@@ -13,6 +13,7 @@
 		"permanent_injury_1", "permanent_injury_2", "permanent_injury_3", "permanent_injury_4"
 	],
 	ColorWarned = false,
+	LookLogged = false,
 
 	function colorToHex( _color )
 	{
@@ -38,7 +39,6 @@
 			local entry = {
 				brush = sprite.HasBrush ? sprite.getBrush().Name : "",
 				visible = sprite.Visible,
-				saturation = sprite.Saturation,
 				color = null
 			};
 			try
@@ -55,6 +55,14 @@
 			}
 			ret[name] <- entry;
 		}
+		if (!this.LookLogged && "head" in ret)
+		{
+			this.LookLogged = true;
+			local h = _bro.getSprite("head");
+			local sat = "?";
+			try { sat = h.Saturation; } catch (error) {}
+			::BBCoop.log("Appearance sample (" + _bro.getName() + "): head " + ret.head.brush + " color " + ret.head.color + " saturation " + sat);
+		}
 		return ret;
 	}
 
@@ -69,7 +77,8 @@
 				if (entry.brush != "") sprite.setBrush(entry.brush);
 				else sprite.resetBrush();
 				sprite.Visible = entry.visible;
-				sprite.Saturation = entry.saturation;
+				// Skin came out grey when the read-back saturation was copied, so use the normal value
+				if (name == "head" || name == "body") sprite.Saturation = 1.0;
 				if (entry.color != null) sprite.Color = ::createColor(entry.color);
 			}
 			catch (error)
@@ -92,7 +101,7 @@
 				if (a.HasBrush) b.setBrush(a.getBrush().Name);
 				else b.resetBrush();
 				b.Visible = a.Visible;
-				b.Saturation = a.Saturation;
+				if (name == "head" || name == "body") b.Saturation = 1.0;
 				b.Color = a.Color;
 			}
 			catch (error)
