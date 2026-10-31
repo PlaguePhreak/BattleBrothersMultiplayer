@@ -29,7 +29,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			maxPlayers = ::BBCoop.getSetting("HostMaxPlayers").tointeger(),
 			sessionName = ::BBCoop.getSetting("HostSessionName"),
 			lastServerURL = ::BBCoop.getSetting("LastServerURL"),
-			lastServerHost = ::BBCoop.getSetting("LastServerHost")
+			lastServerHost = ::BBCoop.getSetting("LastServerHost"),
+			coopSaves = ::BBCoop.getCoopSaves()
 		};
 	}
 
@@ -113,6 +114,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	// Host window: save the host's choices; the relay runs on this PC
 	function applyHostSettings( _data )
 	{
+		::BBCoop.HostChosen = true;
 		try
 		{
 			::BBCoop.Mod.ModSettings.getSetting("PlayerName").set(_data.playerName);
@@ -163,6 +165,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			protocol = ::BBCoop.Protocol,
 			dlcs = ::BBCoop.getDLCs()
 		};
+		// once another player is here, this world is played in multiplayer: its saves are co-op saves
+		try { if (::BBCoop.othersOnline()) ::BBCoop.markCoopSave(name); } catch (error) {}
 		try { card.company = ::World.Assets.getName(); } catch (error) {}
 		try { card.day = ::World.getTime().Days; } catch (error) {}
 		return card;

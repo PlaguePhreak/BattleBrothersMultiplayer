@@ -10,6 +10,7 @@ page.addStringSetting("HostSessionName", "", "Session name (hosting)", "Name of 
 page.addRangeSetting("HostMaxPlayers", 8, 2, 8, 1, "Max players (hosting)", "How many players can be in a session you host, you included.");
 page.addStringSetting("LastServerURL", "", "Last server", "Address of the last world you joined; the join window's Rejoin last server button uses it.");
 page.addStringSetting("LastServerHost", "", "Last server's host", "Who hosted the last world you joined.");
+page.addStringSetting("CoopSaves", "", "Co-op saves", "Save files used in multiplayer, marked Co-op in the Load screen. Filled in automatically.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 
 ::BBCoop.getSetting <- function( _id )
@@ -31,6 +32,87 @@ page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co
 	ret.sort();
 	return ret;
 }
+
+// Co-op saves (v0.14.0): a world that was hosted carries the flag BBCoopSave (the host's name),
+// so every save of it is marked. Loading one outside of hosting shows a reminder.
+// Set when the player used Multiplayer > Host a world in this game session
+::BBCoop.HostChosen <- false;
+
+::BBCoop.markCoopSave <- function( _host )
+{
+	if (!::World.Flags.has("BBCoopSave")) ::BBCoop.log("This world is now a co-op save.");
+	::World.Flags.set("BBCoopSave", _host);
+}
+
+// Another real player (not the test bot) was heard from in the last 20 seconds
+::BBCoop.othersOnline <- function()
+{
+	foreach (name, time in ::BBCoop.Seen)
+		if (name != "Bot" && ::Time.getRealTimeF() - time <= 20.0) return true;
+	return false;
+}
+
+// Save file names of co-op worlds, kept so the Load screen can label them (newest last, at most 200)
+::BBCoop.getCoopSaves <- function()
+{
+	local text = ::BBCoop.getSetting("CoopSaves");
+	local list = [];
+	if (text == "") return list;
+	local start = 0;
+	while (true)
+	{
+		local i = text.find("|", start);
+		if (i == null) { list.push(text.slice(start)); break; }
+		list.push(text.slice(start, i));
+		start = i + 1;
+	}
+	return list;
+}
+
+::BBCoop.rememberCoopSave <- function( _fileName )
+{
+	if (_fileName == null || _fileName == "") return;
+	local list = ::BBCoop.getCoopSaves();
+	local i = list.find(_fileName);
+	if (i != null) list.remove(i);
+	list.push(_fileName);
+	while (list.len() > 200) list.remove(0);
+	local text = "";
+	foreach (j, name in list) text += (j == 0 ? "" : "|") + name;
+	::BBCoop.Mod.ModSettings.getSetting("CoopSaves").set(text);
+}
+
+::BBCoop.isCoopSave <- function()
+{
+	return ::World.Flags.has("BBCoopSave");
+}
+
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	// saves of a co-op world (manual, quick and autosaves all come through here) get the Co-op label
+	q.saveCampaign = @(__original) function( _campaignFileName, _campaignLabel = null )
+	{
+		__original(_campaignFileName, _campaignLabel);
+		try { if (::BBCoop.isCoopSave()) ::BBCoop.rememberCoopSave(_campaignFileName); }
+		catch (error) { ::BBCoop.log("Remembering the co-op save failed: " + error); }
+	}
+
+	q.loadCampaign = @(__original) function( _campaignFileName )
+	{
+		__original(_campaignFileName);
+		try
+		{
+			if (!::BBCoop.isCoopSave()) return;
+			::BBCoop.rememberCoopSave(_campaignFileName);
+			::BBCoop.log("Loaded co-op save " + _campaignFileName + " (hosted by " + ::World.Flags.get("BBCoopSave") + ")");
+			if (!::BBCoop.HostChosen)
+				::BBCoop.notify("This save is co-op specific. To play it with your friends, load it through Multiplayer > Host a world.");
+		}
+		catch (error)
+		{
+			::BBCoop.log("Checking for a co-op save failed: " + error);
+		}
+	}
+});
 
 // When we last heard from each player (any message counts; games send a heartbeat every 5s)
 ::BBCoop.Seen <- {};
