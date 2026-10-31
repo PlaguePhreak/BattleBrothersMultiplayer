@@ -1,5 +1,7 @@
 this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
-	m = {},
+	m = {
+		BotEnabled = false
+	},
 
 	function create()
 	{
@@ -18,6 +20,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			relayURL = ::BBCoop.getSetting("RelayURL"),
 			playerName = ::BBCoop.getSetting("PlayerName"),
 			modVersion = ::BBCoop.Version,
+			clan = ::BBCoop.getClan(),
+			dlcs = ::BBCoop.getDLCs(),
 			gameVersion = ::GameInfo.getVersionNumber()
 		};
 	}
@@ -38,6 +42,22 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		});
 	}
 
+	function sendMessage( _type, _payload )
+	{
+		if (!this.isConnected()) return;
+		this.m.JSHandle.asyncCall("send", { type = _type, payload = _payload });
+	}
+
+	function isBotEnabled()
+	{
+		return this.m.BotEnabled;
+	}
+
+	function setBotEnabled( _bool )
+	{
+		this.m.BotEnabled = _bool;
+	}
+
 	function showToast( _text )
 	{
 		if (!this.isConnected()) return;
@@ -45,6 +65,58 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	}
 
 	// ---- called from JS ----
+
+	// Join window: save the address and name the player typed, return the config to connect with
+	function applyJoinSettings( _data )
+	{
+		try
+		{
+			::BBCoop.Mod.ModSettings.getSetting("RelayURL").set(_data.relayURL);
+			::BBCoop.Mod.ModSettings.getSetting("PlayerName").set(_data.playerName);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not save the join settings: " + error);
+		}
+		return this.getConfig();
+	}
+
+	// The host answered: open the new campaign screen with its seed
+	function startJoin( _info )
+	{
+		::BBCoop.Join.start(_info);
+	}
+
+	function closeBattlePanel()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("closeBattlePanel", null);
+	}
+
+	function showPrompt( _prompt )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("showPrompt", _prompt);
+	}
+
+	function closePrompt( _id )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("closePrompt", _id);
+	}
+
+	function onPromptChoice( _data )
+	{
+		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
+	}
+
+	function openClanWindow()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("openClanWindow", ::BBCoop.getClan());
+	}
+
+	function setClan( _clan )
+	{
+		::BBCoop.Mod.ModSettings.getSetting("Clan").set(_clan);
+		::BBCoop.notify(_clan == "" ? "You left your clan." : "You are now in the clan " + _clan + ".");
+	}
 
 	function onLog( _text )
 	{
@@ -65,7 +137,15 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			local player = ::MSU.Utils.getState("world_state").getPlayer();
 			if (player == null) return null;
 			local pos = player.getPos();
-			return { x = pos.X, y = pos.Y };
+			local brushes = ::BBCoop.Ghosts.getOwnBrushes();
+			return {
+				x = pos.X,
+				y = pos.Y,
+				seed = ::BBCoop.Ghosts.getSeed(),
+				clan = ::BBCoop.getClan(),
+				baseBrush = brushes.baseBrush,
+				bodyBrush = brushes.bodyBrush
+			};
 		}
 		catch (error)
 		{
@@ -75,13 +155,42 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 
 	function onMessage( _msg )
 	{
+		// messages meant for one player carry a "to" field
+		::BBCoop.Seen[_msg.from] <- ::Time.getRealTimeF();
+		if (typeof _msg.payload == "table" && ("to" in _msg.payload) && _msg.payload.to != ::BBCoop.getSetting("PlayerName"))
+			return;
+
 		switch (_msg.type)
 		{
+			case "alive":
+				break;
+			case "join_refused":
+				::BBCoop.Battle.onJoinRefused(_msg.from, _msg.payload);
+				break;
+			case "battle_start":
+				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
+				break;
+			case "battle_join":
+				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
+				break;
+			case "session_request":
+				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
+				break;
+			case "battle_over":
+				::BBCoop.Battle.onBattleOver(_msg.from, _msg.payload);
+				break;
+			case "battle_order":
+				::BBCoop.Remote.onOrder(_msg.from, _msg.payload);
+				break;
+			case "battle_result":
+				::BBCoop.Battle.onBattleResult(_msg.from, _msg.payload);
+				break;
 			case "hello":
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;
 			case "pos":
-				::BBCoop.log(format("%s is at world position (%.0f, %.0f)", _msg.from, _msg.payload.x.tofloat(), _msg.payload.y.tofloat()));
+				if ("origin" in _msg.payload) ::BBCoop.Battle.PlayerOrigins[_msg.from] <- _msg.payload.origin;
+				::BBCoop.Ghosts.onPosition(_msg.from, _msg.payload);
 				break;
 			case "join":
 				::BBCoop.notify(_msg.from + " joined the session (mod " + _msg.payload.modVersion + ", game " + _msg.payload.gameVersion + ")");
