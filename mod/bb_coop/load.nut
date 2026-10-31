@@ -73,6 +73,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/remote.nut");
 ::include("bb_coop/join.nut");
 ::include("bb_coop/loot.nut");
+::include("bb_coop/world.nut");
 
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)
 ::Hooks.registerJS("ui/mods/bb_coop/bb_coop_connection.js");

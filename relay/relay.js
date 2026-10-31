@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.9.0';
+const VERSION = '0.11.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
@@ -72,11 +72,24 @@ function activePlayers() {
   return [...players.entries()].filter(([, p]) => p.lastSeen >= cutoff).map(([n]) => n);
 }
 
+// World updates replace the sender's previous one, so the history doesn't fill up with
+// stale copies of the whole world
+const LATEST_ONLY = new Set(['world_full', 'world_parties']);
+
 function pushMessage(from, type, payload) {
   const msg = { seq: ++seq, from, type, payload, time: Date.now() };
+  if (LATEST_ONLY.has(type)) {
+    const to = payload && payload.to;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.from === from && m.type === type && ((m.payload && m.payload.to) === to)) messages.splice(i, 1);
+    }
+  }
   messages.push(msg);
   if (messages.length > MAX_MESSAGES) messages.shift();
-  if (type !== 'pos') {
+  if (type === 'world_full' && payload) {
+    console.log(`[${new Date().toISOString()}] ${from}: world_full (${(payload.parties || []).length} parties, ${(payload.locations || []).length} locations, day ${payload.day})`);
+  } else if (type !== 'pos' && type !== 'world_parties') {
     let text = JSON.stringify(payload);
     if (text.length > 300) text = text.slice(0, 300) + `... (${text.length} chars)`;
     console.log(`[${new Date().toISOString()}] ${from}: ${type} ${text}`);
@@ -103,17 +116,108 @@ const BOT_ORIGINS = { mercenaries: 'Mercenaries', deserters: 'Deserters', militi
 const originArg = args.find((a) => a.startsWith('--origin='));
 let botOrigin = originArg ? originArg.slice(9) : (botWorld && botWorld.origin) || Object.keys(BOT_ORIGINS)[Math.floor(Math.random() * Object.keys(BOT_ORIGINS).length)];
 if (!BOT_ORIGINS[botOrigin]) botOrigin = 'mercenaries';
-function rememberWorld(p) {
-  if (!p.seed) return;
-  botWorld = { seed: p.seed, x: p.x, y: p.y, origin: botOrigin };
+function saveBotWorld(force) {
   const now = Date.now();
-  if (now - botWorldSaved < 10000) return;
+  if (!force && now - botWorldSaved < 10000) return;
   botWorldSaved = now;
   try { fs.writeFileSync(BOT_STATE_FILE, JSON.stringify(botWorld)); } catch (e) {}
 }
+function rememberWorld(p) {
+  if (!p.seed) return;
+  const full = botWorld && botWorld.seed === p.seed ? botWorld.full : null;
+  botWorld = { seed: p.seed, x: p.x, y: p.y, origin: botOrigin, full };
+  saveBotWorld(false);
+}
+
+// Shared world test: the bot keeps the last whole world a host sent ("world_full") and plays
+// host with it for players who joined the bot's world. Its parties stand still; what a joiner
+// destroys is taken out of the copy, so the round trip can be tested with one game.
+const botFollowers = new Map(); // player -> last time they asked for the world
+const playerPos = new Map();    // player -> { x, y } from their position updates
+const botAmbushed = new Map();  // party id -> time the bot last made it attack
+let botWorldSent = 0, botPartiesSent = 0;
+function botWorldMessage(msg) {
+  const p = msg.payload || {};
+  if (msg.type === 'world_full') {
+    if (!botWorld || p.seed !== botWorld.seed) botWorld = Object.assign(botWorld || {}, { seed: p.seed, origin: botOrigin });
+    botWorld.full = p;
+    saveBotWorld(false);
+    return true;
+  }
+  if (p.to !== BOT_NAME) return msg.type.startsWith('world_');
+  const full = botWorld && botWorld.full;
+  if (msg.type === 'world_ambush') {
+    console.log(`Bot: ${p.n} caught the bot's company on ${msg.from}'s map (a player would fight it now)`);
+  } else if (msg.type === 'world_request') {
+    if (!full) { console.log(`Bot: ${msg.from} asked for the world, but no host has sent one yet`); return true; }
+    botFollowers.set(msg.from, Date.now());
+    console.log(`Bot: hosting the world for ${msg.from} (${full.parties.length} parties, ${full.locations.length} locations)`);
+    pushMessage(BOT_NAME, 'world_full', Object.assign({}, full, { to: msg.from }));
+  } else if (msg.type === 'world_party_destroyed' && full) {
+    const i = full.parties.findIndex((x) => x.id === p.id);
+    if (i >= 0) { console.log(`Bot: ${msg.from} destroyed ${full.parties[i].n}`); full.parties.splice(i, 1); saveBotWorld(true); }
+  } else if (msg.type === 'world_party_troops' && full) {
+    const party = full.parties.find((x) => x.id === p.id);
+    if (party) { console.log(`Bot: ${party.n} survived ${msg.from}'s attack with ${p.t.length} of ${party.t.length} troops`); party.t = p.t; saveBotWorld(true); }
+  } else if (msg.type === 'world_location_destroyed' && full) {
+    const i = full.locations.findIndex((x) => x.k === p.k && x.ty === p.ty);
+    if (i >= 0) { console.log(`Bot: ${msg.from} destroyed ${full.locations[i].n}`); full.locations.splice(i, 1); saveBotWorld(true); }
+  } else if (msg.type === 'world_location_troops' && full) {
+    const loc = full.locations.find((x) => x.k === p.k && x.ty === p.ty);
+    if (loc) { console.log(`Bot: ${loc.n} held against ${msg.from} with ${p.t.length} defenders left`); loc.t = p.t; saveBotWorld(true); }
+  }
+  return true;
+}
+// Hostile parties near a joiner walk towards them and attack when they catch up, the way
+// the host's AI would (the host's game sends "world_ambush" when its party reaches the ghost)
+function botHunt(full, now) {
+  for (const [name] of botFollowers) {
+    const pos = playerPos.get(name);
+    if (!pos) continue;
+    for (const party of full.parties) {
+      if (!party.hp) continue;
+      const dx = pos.x - party.x, dy = pos.y - party.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 500) continue;
+      const last = botAmbushed.get(party.id) || 0;
+      if (now - last < 60000) continue;
+      if (dist <= 60) {
+        botAmbushed.set(party.id, now);
+        console.log(`Bot: ${party.n} attacks ${name}`);
+        pushMessage(BOT_NAME, 'world_ambush', { to: name, id: party.id, n: party.n });
+      } else {
+        const step = Math.min(dist - 40, 45);
+        party.x = Math.round(party.x + dx / dist * step);
+        party.y = Math.round(party.y + dy / dist * step);
+      }
+    }
+  }
+}
+
+function botWorldTick() {
+  const full = botWorld && botWorld.full;
+  if (!full || !botFollowers.size) return;
+  const now = Date.now();
+  for (const [name] of botFollowers) {
+    const p = players.get(name);
+    if (!p || now - p.lastSeen > 60000) botFollowers.delete(name);
+  }
+  if (now - botWorldSent >= 30000) {
+    botWorldSent = now;
+    for (const [name] of botFollowers) pushMessage(BOT_NAME, 'world_full', Object.assign({}, full, { to: name }));
+  } else if (now - botPartiesSent >= 2000) {
+    botPartiesSent = now;
+    botHunt(full, now);
+    const flat = [];
+    for (const party of full.parties) flat.push(party.id, party.x, party.y);
+    for (const [name] of botFollowers) pushMessage(BOT_NAME, 'world_parties', { to: name, seed: full.seed, p: flat });
+  }
+}
 
 function botHear(msg) {
+  if (msg.type.startsWith('world_') && botWorldMessage(msg)) return;
   if (msg.type === 'pos' && msg.payload) {
+    playerPos.set(msg.from, { x: msg.payload.x, y: msg.payload.y });
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
@@ -211,6 +315,7 @@ function botBattleView(host, view) {
 let botAliveSent = 0;
 function botTick() {
   touch(BOT_NAME);
+  botWorldTick();
   if (!bot.target) {
     // no world position yet (e.g. the relay restarted mid-battle): still tell games the bot is here
     if (Date.now() - botAliveSent > 5000) { botAliveSent = Date.now(); pushMessage(BOT_NAME, 'alive', {}); }
@@ -222,6 +327,7 @@ function botTick() {
     x: bot.target.x + Math.cos(bot.angle) * r,
     y: bot.target.y + Math.sin(bot.angle) * r,
     seed: bot.seed,
+    strength: 120, // so the host's enemies go after the bot's company too
     clan: BOT_CLAN,
     origin: botOrigin,
     baseBrush: '',

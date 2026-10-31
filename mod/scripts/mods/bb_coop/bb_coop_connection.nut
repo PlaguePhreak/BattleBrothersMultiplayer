@@ -146,7 +146,11 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			if (player == null) return null;
 			local pos = player.getPos();
 			local brushes = ::BBCoop.Ghosts.getOwnBrushes();
+			local strength = 0.0;
+			try { strength = player.getStrength(); } catch (error) {}
+			if (strength <= 0) strength = ::World.getPlayerRoster().getSize() * 10.0;
 			return {
+				strength = strength,
 				x = pos.X,
 				y = pos.Y,
 				seed = ::BBCoop.Ghosts.getSeed(),
@@ -199,7 +203,32 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "hello":
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;
+			case "world_full":
+				::BBCoop.World.onFull(_msg.from, _msg.payload);
+				break;
+			case "world_parties":
+				::BBCoop.World.onParties(_msg.from, _msg.payload);
+				break;
+			case "world_ambush":
+				::BBCoop.World.onAmbush(_msg.from, _msg.payload);
+				break;
+			case "world_request":
+				::BBCoop.World.onRequest(_msg.from, _msg.payload);
+				break;
+			case "world_party_destroyed":
+				::BBCoop.World.onPartyDestroyed(_msg.from, _msg.payload);
+				break;
+			case "world_party_troops":
+				::BBCoop.World.onPartyTroops(_msg.from, _msg.payload);
+				break;
+			case "world_location_destroyed":
+				::BBCoop.World.onLocationDestroyed(_msg.from, _msg.payload);
+				break;
+			case "world_location_troops":
+				::BBCoop.World.onLocationTroops(_msg.from, _msg.payload);
+				break;
 			case "pos":
+				::BBCoop.World.onPosition(_msg.from, _msg.payload);
 				if ("origin" in _msg.payload) ::BBCoop.Battle.PlayerOrigins[_msg.from] <- _msg.payload.origin;
 				::BBCoop.Ghosts.onPosition(_msg.from, _msg.payload);
 				break;
