@@ -13,6 +13,7 @@
 	HostBattleID = null,    // set while we host a battle
 	Reinforcements = [],    // { key, owner, name, bro = WeakTableRef }
 	JoinedOwners = {},      // owner name -> true
+	PlayerOrigins = {},     // player name -> origin id, sent by the relay's test bot
 
 	// ---- ally side ----
 	Invite = null,          // { host, battleID, time } offer we can accept with the keybind
@@ -50,7 +51,7 @@
 		local payload = { battleID = this.HostBattleID, pos = pos, clan = ::BBCoop.getClan(), enemies = this.getEnemyNames() };
 		// The relay's test bot can't make brothers itself, so our game rolls a fresh company for it
 		if (::BBCoop.Connection.isBotEnabled())
-			payload.company <- ::BBCoop.Roster.rollCompany(6);
+			payload.company <- ::BBCoop.Roster.rollCompany("Bot" in this.PlayerOrigins ? this.PlayerOrigins["Bot"] : "mercenaries");
 
 		::BBCoop.Connection.sendMessage("battle_start", payload);
 		::BBCoop.log("Battle started, told other players (" + this.HostBattleID + ")");

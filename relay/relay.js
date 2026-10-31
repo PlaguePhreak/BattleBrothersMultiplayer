@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.2';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -87,9 +87,14 @@ const BOT_STATE_FILE = path.join(__dirname, 'bot-state.json');
 let botWorld = null;
 try { botWorld = JSON.parse(fs.readFileSync(BOT_STATE_FILE, 'utf8')); } catch (e) {}
 let botWorldSaved = 0;
+// The bot's one company origin (the game rolls brothers to match), kept between relay runs
+const BOT_ORIGINS = { mercenaries: 'Mercenaries', deserters: 'Deserters', militia: 'Peasant Militia', beast_slayers: 'Beast Slayers', caravan: 'Trading Caravan', lone_wolf: 'Lone Wolf' };
+const originArg = args.find((a) => a.startsWith('--origin='));
+let botOrigin = originArg ? originArg.slice(9) : (botWorld && botWorld.origin) || Object.keys(BOT_ORIGINS)[Math.floor(Math.random() * Object.keys(BOT_ORIGINS).length)];
+if (!BOT_ORIGINS[botOrigin]) botOrigin = 'mercenaries';
 function rememberWorld(p) {
   if (!p.seed) return;
-  botWorld = { seed: p.seed, x: p.x, y: p.y };
+  botWorld = { seed: p.seed, x: p.x, y: p.y, origin: botOrigin };
   const now = Date.now();
   if (now - botWorldSaved < 10000) return;
   botWorldSaved = now;
@@ -197,6 +202,7 @@ function botTick() {
     y: bot.target.y + Math.sin(bot.angle) * r,
     seed: bot.seed,
     clan: BOT_CLAN,
+    origin: botOrigin,
     baseBrush: '',
     bodyBrush: 'figure_mercenary_02',
   });
@@ -306,5 +312,5 @@ if (BOT) setInterval(botTick, 1000);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Battle Brothers Co-op relay v${VERSION} listening on port ${PORT}`);
   console.log(`Same PC: http://127.0.0.1:${PORT}   Other PC on your network: http://<this PC's IP>:${PORT}`);
-  if (BOT) console.log('Bot player enabled: its company will circle yours once you are on the world map.');
+  if (BOT) console.log(`Bot player enabled (origin: ${BOT_ORIGINS[botOrigin]}, clan: ${BOT_CLAN}). Its company will circle yours once you are on the world map. Pick an origin with --origin=<${Object.keys(BOT_ORIGINS).join('|')}>`);
 });

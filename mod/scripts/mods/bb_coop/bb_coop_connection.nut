@@ -178,6 +178,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;
 			case "pos":
+				if ("origin" in _msg.payload) ::BBCoop.Battle.PlayerOrigins[_msg.from] <- _msg.payload.origin;
 				::BBCoop.Ghosts.onPosition(_msg.from, _msg.payload);
 				break;
 			case "join":

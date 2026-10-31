@@ -158,20 +158,30 @@
 		return ret;
 	}
 
-	// A freshly rolled company for the relay's test bot, made in our game (the bot has none)
-	BotBackgrounds = ["sellsword_background", "militia_background", "retired_soldier_background", "hunter_background", "brawler_background", "deserter_background", "farmhand_background", "wildman_background", "witchhunter_background", "squire_background"],
+	// The relay's test bot picks one company origin; our game rolls a company that fits it
+	// (the bot can't make brothers itself). Base game backgrounds only.
+	BotOrigins = {
+		mercenaries = { name = "Mercenaries", count = 3, backgrounds = ["sellsword_background", "retired_soldier_background", "militia_background"] },
+		deserters = { name = "Deserters", count = 6, backgrounds = ["deserter_background"] },
+		militia = { name = "Peasant Militia", count = 8, backgrounds = ["militia_background", "farmhand_background", "daytaler_background", "miller_background", "lumberjack_background"] },
+		beast_slayers = { name = "Beast Slayers", count = 3, backgrounds = ["beast_hunter_background"] },
+		caravan = { name = "Trading Caravan", count = 3, backgrounds = ["caravan_hand_background"] },
+		lone_wolf = { name = "Lone Wolf", count = 1, backgrounds = ["hedge_knight_background"] }
+	},
 
-	function rollCompany( _count )
+	function rollCompany( _originID )
 	{
+		local origin = _originID in this.BotOrigins ? this.BotOrigins[_originID] : this.BotOrigins.mercenaries;
+		::BBCoop.log("Rolling the bot's company: " + origin.name);
 		local bros = [];
 		local roster = ::World.getTemporaryRoster();
-		for (local i = 0; i < _count; i++)
+		for (local i = 0; i < origin.count; i++)
 		{
 			local bro = null;
 			try
 			{
 				bro = roster.create("scripts/entity/tactical/player");
-				bro.setStartValuesEx(this.BotBackgrounds);
+				bro.setStartValuesEx(origin.backgrounds);
 				bros.push({ key = "bot_" + i, name = bro.getName(), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
 			}
 			catch (error)
