@@ -74,6 +74,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/join.nut");
 ::include("bb_coop/loot.nut");
 ::include("bb_coop/world.nut");
+::include("bb_coop/trade.nut");
 
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)
 ::Hooks.registerJS("ui/mods/bb_coop/bb_coop_connection.js");
@@ -100,3 +101,8 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 	::BBCoop.Connection.openClanWindow();
 	return true;
 }, "Clan window", null, "Create, join or leave a clan. Clanmates always fight on the same side.");
+
+::BBCoop.Mod.Keybinds.addSQKeybind("TradeWindow", "ctrl+t", ::MSU.Key.State.World, function() {
+	::BBCoop.Connection.openTradeWindow();
+	return true;
+}, "Trade window", null, "Send items, crowns or brothers to another player whose company is next to yours.");

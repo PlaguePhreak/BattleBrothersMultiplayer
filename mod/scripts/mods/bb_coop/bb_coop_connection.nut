@@ -107,6 +107,26 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	function onPromptChoice( _data )
 	{
 		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
+		::BBCoop.Trade.onPromptChoice(_data.id, _data.choice);
+	}
+
+	function openTradeWindow()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("openTradeWindow", ::BBCoop.Trade.getWindowData());
+	}
+
+	// returns an error text, or null when the offer went out
+	function sendTrade( _data )
+	{
+		try
+		{
+			return ::BBCoop.Trade.send(_data);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Trade failed: " + error);
+			return "The trade failed: " + error;
+		}
 	}
 
 	function openClanWindow()
@@ -208,6 +228,21 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "world_parties":
 				::BBCoop.World.onParties(_msg.from, _msg.payload);
+				break;
+			case "trade_offer":
+				::BBCoop.Trade.onOffer(_msg.from, _msg.payload);
+				break;
+			case "trade_answer":
+				::BBCoop.Trade.onAnswer(_msg.from, _msg.payload);
+				break;
+			case "trade_confirm":
+				::BBCoop.Trade.onConfirm(_msg.from, _msg.payload);
+				break;
+			case "trade_cancel":
+				::BBCoop.Trade.onCancel(_msg.from, _msg.payload);
+				break;
+			case "trade_return":
+				::BBCoop.Trade.onReturn(_msg.from, _msg.payload);
 				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);
