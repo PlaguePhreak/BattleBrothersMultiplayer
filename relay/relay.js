@@ -12,9 +12,9 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.14.0';
+const VERSION = '0.15.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 1;
+const PROTOCOL = 2;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
@@ -163,6 +163,7 @@ const botFollowers = new Map(); // player -> last time they asked for the world
 const playerPos = new Map();    // player -> { x, y } from their position updates
 const botOffers = new Set();     // trade offers the bot sent that wait for an answer
 const botAmbushed = new Map();  // party id -> time the bot last made it attack
+const botContractAsked = new Set(); // clanmates the bot already shared its test contract with
 let botWorldSent = 0, botPartiesSent = 0;
 function botWorldMessage(msg) {
   const p = msg.payload || {};
@@ -246,6 +247,12 @@ function botHear(msg) {
   if (msg.type.startsWith('world_') && botWorldMessage(msg)) return;
   if (msg.type === 'pos' && msg.payload) {
     playerPos.set(msg.from, { x: msg.payload.x, y: msg.payload.y });
+    // shared contract test: the first time a player shows up in the bot's clan, the bot shares one
+    if (msg.payload.clan === BOT_CLAN && !botContractAsked.has(msg.from)) {
+      botContractAsked.add(msg.from);
+      setTimeout(() => pushMessage(BOT_NAME, 'contract_share', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", employer: 'Botsford', objectives: ['Wait about ten seconds.'], dest: '' }), 3000);
+      console.log(`Bot: ${msg.from} is in ${BOT_CLAN}; sharing a test contract`);
+    }
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
@@ -271,6 +278,18 @@ function botHear(msg) {
     const known = botOffers.delete(msg.payload.id);
     if (msg.payload.accepted) pushMessage(BOT_NAME, known ? 'trade_confirm' : 'trade_cancel', { to: msg.from, id: msg.payload.id });
     console.log(`Bot: ${msg.from} ${msg.payload.accepted ? 'accepted' : 'declined'} the bot's gift`);
+  } else if (msg.type === 'contract_share' && msg.payload && msg.payload.to === BOT_NAME) {
+    console.log(`Bot: ${msg.from} shares the contract "${msg.payload.title}"; helping`);
+    setTimeout(() => pushMessage(BOT_NAME, 'contract_join', { to: msg.from, id: msg.payload.id, join: true }), 2000);
+  } else if (msg.type === 'contract_pay' && msg.payload && msg.payload.to === BOT_NAME) {
+    console.log(`Bot: ${msg.from} paid the bot ${msg.payload.crowns} of ${msg.payload.total} crowns for "${msg.payload.title}"`);
+  } else if (msg.type === 'contract_done' && msg.payload && msg.payload.to === BOT_NAME) {
+    console.log(`Bot: ${msg.from}'s contract "${msg.payload.title}" ${msg.payload.cancelled ? 'was broken' : 'is finished'}`);
+  } else if (msg.type === 'contract_join' && msg.payload && msg.payload.to === BOT_NAME && msg.payload.id === 'bot_1') {
+    if (!msg.payload.join) { console.log(`Bot: ${msg.from} won't help with the test contract`); return; }
+    console.log(`Bot: ${msg.from} helps with the test contract; paying their share in 10s`);
+    setTimeout(() => pushMessage(BOT_NAME, 'contract_pay', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", crowns: 150, total: 300 }), 10000);
+    setTimeout(() => pushMessage(BOT_NAME, 'contract_done', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", cancelled: false }), 10500);
   } else if (msg.type === 'battle_start' && msg.payload) {
     // join with the company the host's game rolled for the bot
     const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));
