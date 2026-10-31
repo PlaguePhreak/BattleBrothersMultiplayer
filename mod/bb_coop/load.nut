@@ -21,6 +21,8 @@ page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co
 		::BBCoop.Connection.showToast(_text);
 }
 
+::include("bb_coop/ghosts.nut");
+
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)
 ::Hooks.registerJS("ui/mods/bb_coop/bb_coop_connection.js");
 ::BBCoop.Connection <- ::new("scripts/mods/bb_coop/bb_coop_connection");

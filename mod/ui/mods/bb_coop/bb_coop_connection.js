@@ -9,6 +9,7 @@ var BBCoopConnection = function ()
 	this.mSessionId = 0;      // bumped on each start() so old poll loops stop
 	this.mLastSeq = 0;
 	this.mLastPos = null;
+	this.mLastPosSent = 0;
 	this.mPollTimer = null;
 	this.mPosTimer = null;
 };
@@ -179,9 +180,12 @@ BBCoopConnection.prototype.sendPosition = function (_session)
 	SQ.call(this.mSQHandle, 'getWorldPosition', null, function (_pos)
 	{
 		if (_pos === null || _pos === undefined) return;
-		// only send when the company actually moved
-		if (self.mLastPos !== null && Math.abs(self.mLastPos.x - _pos.x) < 1 && Math.abs(self.mLastPos.y - _pos.y) < 1) return;
+		// send when the company moved, and at least every 5s so the other side knows we're still here
+		var now = new Date().getTime();
+		var moved = self.mLastPos === null || Math.abs(self.mLastPos.x - _pos.x) >= 1 || Math.abs(self.mLastPos.y - _pos.y) >= 1;
+		if (!moved && now - self.mLastPosSent < 5000) return;
 		self.mLastPos = _pos;
+		self.mLastPosSent = now;
 		self.send({ type: 'pos', payload: _pos });
 	});
 };

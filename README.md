@@ -4,15 +4,17 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.1.1, connection prototype.** It proves the game can talk to the relay. It does not add gameplay yet. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.2.0, ghost companies.** Each player sees the other's company moving on their world map. No shared battles yet. Target is the vanilla game first; Legends and other mods come later.
 
-## What v0.1.1 does
+## What v0.2.0 does
+
+- **Ghost companies:** while you are on the world map, your company's position is sent about once a second. The other player's game shows your company there as a friendly party that follows you smoothly. It never fights, is never saved, and disappears 20 seconds after you go quiet (closing the game, going to the main menu).
+- For positions to line up, both players must start a **new campaign with the same map seed** (copy the seed from the new-campaign screen). You get a warning if the seeds differ. Campaigns started before installing v0.2.0 don't know their seed, so no check happens there.
 
 - On the main menu, pings the relay and shows an on-screen notification (top right) saying whether it is reachable.
 - Joins a session and shows which other players are connected.
 - Tests whether the game's browser supports WebSockets (result in `log.html`).
 - `Ctrl+H` (world map or battle) sends a "hello" notification to the other player (you get a "Hello sent" confirmation).
-- While on the world map, sends your company's position about once a second. The other player's game writes it to `log.html`.
 - `Ctrl+J` re-runs the connection test (use it after changing settings).
 
 ## Requirements
@@ -34,26 +36,27 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
    - **Relay URL:** player 1 keeps `http://127.0.0.1:7777`; player 2 uses `http://<player 1's IP>:7777`.
    - **Player name:** each player picks a different name.
 3. Press `Ctrl+J` (or restart) to reconnect with the new settings.
-4. Start or load a campaign and press `Ctrl+H`. The other player should get a popup.
+4. Start campaigns with the same map seed, then press `Ctrl+H`. The other player should get a notification, and each of you should see the other's company on the map.
 
-You can also test alone: run the relay and start the game on the same PC. You should see "Relay reachable" and "Joined co-op session" popups.
+**Testing alone:** start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos.
 
-**Please send back** the `[BBCoop]` lines from `Documents/Battle Brothers/log.html`, especially the WebSocket test line.
+If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothers/log.html`.
 
 ## Layout
 
 - `mod/`: the mod, zipped as-is into `mod_bb_coop.zip`
   - `scripts/!mods_preload/mod_bb_coop.nut`: registers with Modern Hooks and MSU
   - `bb_coop/load.nut`: settings, keybinds, connection setup
+  - `bb_coop/ghosts.nut`: ghost companies on the world map, map seed tracking
   - `scripts/mods/bb_coop/bb_coop_connection.nut`: Squirrel side of the bridge
   - `ui/mods/bb_coop/bb_coop_connection.js`: network layer (HTTP to the relay)
-- `relay/relay.js`: relay server, no dependencies
+- `relay/relay.js`: relay server, no dependencies (`--bot` adds a fake player)
 - `tests/js_client_harness.js`: runs two simulated clients' JS against the relay: `node tests/js_client_harness.js`
 
 ## Roadmap
 
-1. **Connection prototype** (this version)
-2. **Ghost companies:** same map seed for both players; each sees the other's company on the world map
+1. **Connection prototype** (done: works in-game, WebSockets supported)
+2. **Ghost companies** (this version)
 3. **Fighting together:** one player's battle spawns the other's brothers as allies; results go back to their roster
 4. **Selective world sync:** share chosen world events (destroyed camps, etc.)
 5. **Mod compatibility:** Legends, then others
