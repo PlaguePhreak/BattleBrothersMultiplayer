@@ -169,6 +169,8 @@ BBCoopConnection.prototype.poll = function (_session)
 			{
 				var msg = _data.messages[i];
 				if (msg.from === self.mConfig.playerName) continue;
+				// world updates can be big: don't hand someone else's to the game
+				if (msg.type.indexOf('world_') === 0 && msg.payload && msg.payload.to && msg.payload.to !== self.mConfig.playerName) continue;
 				self.notePlayer(msg);
 				if (self.handleBattleMessage(msg)) continue;
 				SQ.call(self.mSQHandle, 'onMessage', msg);

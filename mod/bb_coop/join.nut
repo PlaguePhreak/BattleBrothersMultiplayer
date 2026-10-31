@@ -86,6 +86,8 @@
 			::BBCoop.notify("The map seed was changed, so your company starts on its own map instead of next to " + info.host + ".");
 			return;
 		}
+		// from now on this world follows the host's (world.nut)
+		::World.Flags.set("BBCoopHost", info.host);
 		local tile = this.findSpawnTile(info.x, info.y);
 		if (tile == null)
 		{
