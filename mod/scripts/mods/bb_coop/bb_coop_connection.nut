@@ -23,8 +23,21 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			modVersion = ::BBCoop.Version,
 			clan = ::BBCoop.getClan(),
 			dlcs = ::BBCoop.getDLCs(),
-			gameVersion = ::GameInfo.getVersionNumber()
+			gameVersion = ::GameInfo.getVersionNumber(),
+			protocol = ::BBCoop.Protocol,
+			hosting = this.isHosting(),
+			maxPlayers = ::BBCoop.getSetting("HostMaxPlayers").tointeger(),
+			sessionName = ::BBCoop.getSetting("HostSessionName"),
+			lastServerURL = ::BBCoop.getSetting("LastServerURL"),
+			lastServerHost = ::BBCoop.getSetting("LastServerHost")
 		};
+	}
+
+	// The relay runs on this PC, so this game is the host
+	function isHosting()
+	{
+		local url = ::BBCoop.getSetting("RelayURL").tolower();
+		return url.find("://127.0.0.1") != null || url.find("://localhost") != null;
 	}
 
 	function runPing()
@@ -81,6 +94,78 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			::BBCoop.log("Could not save the join settings: " + error);
 		}
 		return this.getConfig();
+	}
+
+	// A join worked: remember the address for the join window's "Rejoin last server" button
+	function setLastServer( _data )
+	{
+		try
+		{
+			::BBCoop.Mod.ModSettings.getSetting("LastServerURL").set(_data.url);
+			::BBCoop.Mod.ModSettings.getSetting("LastServerHost").set(_data.host);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not save the last server: " + error);
+		}
+	}
+
+	// Host window: save the host's choices; the relay runs on this PC
+	function applyHostSettings( _data )
+	{
+		try
+		{
+			::BBCoop.Mod.ModSettings.getSetting("PlayerName").set(_data.playerName);
+			::BBCoop.Mod.ModSettings.getSetting("HostSessionName").set(_data.sessionName);
+			::BBCoop.Mod.ModSettings.getSetting("HostMaxPlayers").set(_data.maxPlayers);
+			::BBCoop.Mod.ModSettings.getSetting("SessionPassword").set(_data.password);
+			if (!this.isHosting())
+				::BBCoop.Mod.ModSettings.getSetting("RelayURL").set("http://127.0.0.1:7777");
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not save the host settings: " + error);
+		}
+		return this.getConfig();
+	}
+
+	// Host window: the host picks the world, a new campaign or one of their saves
+	function openHostWorld( _which )
+	{
+		try
+		{
+			local state = ::MSU.Utils.getState("main_menu_state");
+			if (_which == "load") state.main_menu_module_onLoadCampaignPressed();
+			else state.main_menu_module_onNewCampaignPressed();
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not open the campaign screen: " + error);
+			::BBCoop.notify("Open " + (_which == "load" ? "Load Campaign" : "New Campaign") + " from the main menu; your session is set up.");
+		}
+	}
+
+	// The session card the host's relay shows to anyone who looks (JS sends it every few seconds).
+	// null when not on the world map, so the last one sent stays.
+	function getHostCard()
+	{
+		if (!::MSU.Utils.hasState("world_state")) return null;
+		local name = ::BBCoop.getSetting("PlayerName");
+		local session = ::BBCoop.getSetting("HostSessionName");
+		local card = {
+			host = name,
+			name = session != "" ? session : name + "'s company",
+			company = "",
+			day = 0,
+			max = ::BBCoop.getSetting("HostMaxPlayers").tointeger(),
+			modVersion = ::BBCoop.Version,
+			gameVersion = ::GameInfo.getVersionNumber(),
+			protocol = ::BBCoop.Protocol,
+			dlcs = ::BBCoop.getDLCs()
+		};
+		try { card.company = ::World.Assets.getName(); } catch (error) {}
+		try { card.day = ::World.getTime().Days; } catch (error) {}
+		return card;
 	}
 
 	// The host answered: open the new campaign screen with its seed
