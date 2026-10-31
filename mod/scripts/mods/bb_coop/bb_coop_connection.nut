@@ -193,6 +193,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	{
 		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
 		::BBCoop.Trade.onPromptChoice(_data.id, _data.choice);
+		::BBCoop.Contract.onPromptChoice(_data.id, _data.choice);
 	}
 
 	function openTradeWindow()
@@ -334,6 +335,21 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "trade_return":
 				::BBCoop.Trade.onReturn(_msg.from, _msg.payload);
 				break;
+			case "contract_share":
+				::BBCoop.Contract.onShare(_msg.from, _msg.payload);
+				break;
+			case "contract_join":
+				::BBCoop.Contract.onJoin(_msg.from, _msg.payload);
+				break;
+			case "contract_leave":
+				::BBCoop.Contract.onLeave(_msg.from, _msg.payload);
+				break;
+			case "contract_pay":
+				::BBCoop.Contract.onPay(_msg.from, _msg.payload);
+				break;
+			case "contract_done":
+				::BBCoop.Contract.onDone(_msg.from, _msg.payload);
+				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);
 				break;
@@ -354,6 +370,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "pos":
 				::BBCoop.World.onPosition(_msg.from, _msg.payload);
+				::BBCoop.Contract.onPosition(_msg.from, _msg.payload);
 				if ("origin" in _msg.payload) ::BBCoop.Battle.PlayerOrigins[_msg.from] <- _msg.payload.origin;
 				::BBCoop.Ghosts.onPosition(_msg.from, _msg.payload);
 				break;

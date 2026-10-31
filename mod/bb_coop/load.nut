@@ -79,6 +79,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/loot.nut");
 ::include("bb_coop/world.nut");
 ::include("bb_coop/trade.nut");
+::include("bb_coop/contract.nut");
 
 // Squirrel <-> JS bridge, connected when the main menu loads (same pattern MSU uses)
 ::Hooks.registerJS("ui/mods/bb_coop/bb_coop_connection.js");
@@ -120,3 +121,8 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 	::BBCoop.Connection.openChat();
 	return true;
 }, "Chat in battle", null, "Open the chat during a battle (plain Enter ends the turn there).");
+
+::BBCoop.Mod.Keybinds.addSQKeybind("ShareContract", "ctrl+o", ::MSU.Key.State.World, function() {
+	::BBCoop.Contract.share(false);
+	return true;
+}, "Share contract", null, "Ask online clanmates to help with your contract (taking a contract asks them too). Shows who helps, or whose contract you help with.");
