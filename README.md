@@ -4,9 +4,21 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.2.0, ghost companies.** Each player sees the other's company moving on their world map. No shared battles yet. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.7.0, safe sessions.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
 
-## What v0.2.0 does
+## What it does
+
+- **Safe sessions:** games send a heartbeat every 5 seconds, also during battles. If a player goes quiet for 20 seconds mid-battle, the host controls their brothers until they are back. If the host goes quiet for 60 seconds (crash, quit), or the battle ends without results, the joiner's brothers come home unharmed. While your brothers are away the world stays paused and your own fights are blocked. If the relay restarts, games notice and catch up.
+
+- **Same fight, same battle:** attacking (or being attacked) within 400 units of another player's ongoing battle asks whether to join it instead of starting your own. If your side wins, the parties you had attacked are beaten in your world too. A battle nearby (within the join range) also pops up a join prompt.
+- **Clans and sides:** `Ctrl+K` opens the clan window: create a clan or join another player's. Clanmates always join on the same side; anyone else chooses to join on the host's side or against the host. Brothers joining against the host fight for the enemy and are played by their owner.
+- **DLC check:** joining a world is refused when the two games have different DLCs, because the maps would differ.
+
+- **Multiplayer button (main menu):** enter the host's relay address and your name, press Connect. The host's game (connected and on the world map) answers with its map seed; the new campaign screen opens with that seed filled in. Pick your origin and settings, and when the campaign starts your company is placed next to the host's.
+
+- **Play your own brothers in someone else's battle:** the host's game runs the battle. When one of your brothers is up, the host's game waits and a battle panel opens on your screen showing the battlefield (yours green, allies blue, enemies red). Click a tile to move, or pick a skill and then a highlighted tile; Wait and End turn work as usual. Between your turns the panel shows whose turn it is. If no order arrives for 90 seconds, the host gets control of that brother for the turn.
+
+- **Join a battle as reinforcements:** when another player's battle starts and your company is within the join range (Mod Options, default 600), you get a notification. Press `Ctrl+B` to send your frontline brothers (up to 12). They arrive on free tiles along the map edge nearest the host's company and fight on the host's side. When the battle ends, each brother comes back to your roster with their new wounds, XP and gear, or is buried with an obituary entry if they fell.
 
 - **Ghost companies:** while you are on the world map, your company's position is sent about once a second. The other player's game shows your company there as a friendly party that follows you smoothly. It never fights, is never saved, and disappears 20 seconds after you go quiet (closing the game, going to the main menu).
 - For positions to line up, both players must start a **new campaign with the same map seed** (copy the seed from the new-campaign screen). You get a warning if the seeds differ. Campaigns started before installing v0.2.0 don't know their seed, so no check happens there.
@@ -38,7 +50,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 3. Press `Ctrl+J` (or restart) to reconnect with the new settings.
 4. Start campaigns with the same map seed, then press `Ctrl+H`. The other player should get a notification, and each of you should see the other's company on the map.
 
-**Testing alone:** start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos.
+**Testing alone:** for the Multiplayer button, play any campaign for a few seconds while the bot relay runs (the bot remembers that world in `relay/bot-state.json`), quit to the main menu and use Multiplayer: the bot answers as host. Start the relay with `relay/start-relay-with-bot.bat` (or `node relay/relay.js --bot`). It adds a fake player called "Bot" whose company circles yours on the world map and answers your hellos. When you start a battle, Bot joins 3 seconds later as reinforcements, with a company of its own (one origin, picked at random and remembered; choose one with `--origin=deserters` etc.), and plays them itself. It is in the clan "Bot Clan": join it with `Ctrl+K` and it fights on your side, otherwise it joins against you. It it attacks enemies in reach, otherwise steps towards the nearest enemy and ends its turn.
 
 If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothers/log.html`.
 
@@ -48,6 +60,9 @@ If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothe
   - `scripts/!mods_preload/mod_bb_coop.nut`: registers with Modern Hooks and MSU
   - `bb_coop/load.nut`: settings, keybinds, connection setup
   - `bb_coop/ghosts.nut`: ghost companies on the world map, map seed tracking
+  - `bb_coop/roster.nut`: brothers to network data and back (MSU serialization emulator)
+  - `bb_coop/battle.nut`: shared battles: invites, reinforcements at the map edge, results
+  - `bb_coop/remote.nut`: remote turns: battle views for the other player, carrying out their orders
   - `scripts/mods/bb_coop/bb_coop_connection.nut`: Squirrel side of the bridge
   - `ui/mods/bb_coop/bb_coop_connection.js`: network layer (HTTP to the relay)
 - `relay/relay.js`: relay server, no dependencies (`--bot` adds a fake player)
@@ -56,7 +71,7 @@ If something goes wrong, send the `[BBCoop]` lines from `Documents/Battle Brothe
 ## Roadmap
 
 1. **Connection prototype** (done: works in-game, WebSockets supported)
-2. **Ghost companies** (this version)
-3. **Fighting together:** one player's battle spawns the other's brothers as allies; results go back to their roster
+2. **Ghost companies** (done)
+3. **Fighting together:** join as reinforcements, each player controls their own brothers (this version)
 4. **Selective world sync:** share chosen world events (destroyed camps, etc.)
 5. **Mod compatibility:** Legends, then others
