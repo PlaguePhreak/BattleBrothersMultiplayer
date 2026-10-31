@@ -4,7 +4,7 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.3.0, shared battles (part 1).** Each player sees the other's company on the world map, and can join the other's battle as reinforcements. For now the host controls the reinforcements; letting each player control their own brothers is next. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.3.3, shared battles (part 1).** Each player sees the other's company on the world map, and can join the other's battle as reinforcements. For now the host controls the reinforcements; letting each player control their own brothers is next. Target is the vanilla game first; Legends and other mods come later.
 
 ## What v0.3.0 does
 

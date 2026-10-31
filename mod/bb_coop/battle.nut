@@ -89,6 +89,7 @@
 			{
 				local bro = ::World.getTemporaryRoster().create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
+				if ("look" in entry) ::BBCoop.Roster.applyAppearance(bro, entry.look);
 				bro.setName(entry.name);
 				bro.getFlags().set("BBCoopOwner", _owner);
 				// Guests are player-controlled but stay out of our roster, obituary, score and result screen
@@ -286,6 +287,7 @@
 			{
 				local bro = ::World.getPlayerRoster().create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
+				::BBCoop.Roster.copyAppearance(original, bro); // engine-saved sprites aren't in the data
 				::World.getPlayerRoster().remove(original);
 				survived++;
 			}

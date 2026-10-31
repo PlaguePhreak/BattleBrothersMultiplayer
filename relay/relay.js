@@ -85,7 +85,7 @@ function botHear(msg) {
     setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}!` }), 500);
   } else if (msg.type === 'battle_start' && msg.payload) {
     // join with the copy of the host's own brothers that the game sends when the bot is on
-    const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw }));
+    const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));
     if (!bros.length) return console.log('Bot: battle started, but no company copy was sent');
     setTimeout(() => pushMessage(BOT_NAME, 'battle_join', { battleID: msg.payload.battleID, to: msg.from, bros }), 3000);
     console.log(`Bot: joining ${msg.from}'s battle with ${bros.length} brothers in 3s`);
