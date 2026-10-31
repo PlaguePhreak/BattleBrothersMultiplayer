@@ -76,6 +76,20 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   await sleep(1500);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   check(poll.messages.some((m) => m.type === 'chat' && m.from === 'Bot' && typeof m.payload.text === 'string'), 'bot answers in chat');
+  // shared contracts: the bot helps with a shared contract, and shares its own with a clanmate
+  await send('B', 'contract_share', { to: 'Bot', id: '7', title: 'Destroy Camp', employer: 'Town', objectives: [], dest: '' });
+  await sleep(2300);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'contract_join' && m.payload.to === 'B' && m.payload.id === '7' && m.payload.join === true), 'bot helps with a shared contract');
+  await send('B', 'pos', { x: 900, y: 900, seed: '123', clan: 'Bot Clan' });
+  await sleep(3300);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'contract_share' && m.payload.to === 'B' && m.payload.id === 'bot_1'), 'bot shares its test contract with a clanmate');
+  await send('B', 'contract_join', { to: 'Bot', id: 'bot_1', join: true });
+  await sleep(11000);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  const pay = poll.messages.find((m) => m.type === 'contract_pay' && m.payload.to === 'B');
+  check(pay && pay.payload.crowns === 150 && poll.messages.some((m) => m.type === 'contract_done' && m.payload.to === 'B'), 'bot pays the helper and ends its contract');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });
