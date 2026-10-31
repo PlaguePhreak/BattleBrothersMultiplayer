@@ -4,6 +4,7 @@
 // as reinforcements in the host's battle. When it ends, each brother's new state (or death)
 // is sent back and replaces the original in the ally's roster.
 // For now the host controls the reinforcements; remote control comes in part 2.
+// Checked against the decompiled vanilla scripts (tactical_entity_manager, tactical_state, player).
 
 ::BBCoop.Battle <- {
 	JoinRange = 600.0,      // world units between the two companies
@@ -90,6 +91,8 @@
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				bro.setName(entry.name);
 				bro.getFlags().set("BBCoopOwner", _owner);
+				// Guests are player-controlled but stay out of our roster, obituary, score and result screen
+				bro.setGuest(true);
 				bro.setFaction(::Const.Faction.Player);
 				::Tactical.addEntityToMap(bro, tiles[i].Coords.X, tiles[i].Coords.Y);
 				bro.onCombatStart();
@@ -237,6 +240,30 @@
 		::BBCoop.notify(format("Your company marches into %s's battle. Results arrive when it ends.", this.PendingHost));
 	}
 
+	// Same bookkeeping vanilla does for a brother lost in battle
+	function burial( _bro, _host )
+	{
+		try
+		{
+			::World.Statistics.addFallen({
+				Name = _bro.getName(),
+				Time = ::World.getTime().Days,
+				TimeWithCompany = ::Math.max(1, _bro.getDaysWithCompany()),
+				Kills = _bro.getLifetimeStats().Kills,
+				Battles = _bro.getLifetimeStats().Battles + 1,
+				KilledBy = "Fell in " + _host + "'s battle",
+				Expendable = _bro.getBackground().getID() == "background.slave"
+			});
+			_bro.getSkills().onDeath(::Const.FatalityType.None);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Obituary failed for " + _bro.getName() + ": " + error);
+		}
+		::World.getPlayerRoster().remove(_bro);
+		try { _bro.die(); } catch (error) {}
+	}
+
 	function onBattleResult( _from, _payload )
 	{
 		if (this.PendingRefs == null) return;
@@ -250,7 +277,7 @@
 			if (entry.dead)
 			{
 				died.push(entry.name);
-				::World.getPlayerRoster().remove(original);
+				this.burial(original, _from);
 				continue;
 			}
 			if (entry.raw == null) continue; // keep the original if packing failed

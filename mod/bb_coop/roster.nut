@@ -27,10 +27,9 @@
 				value = value.tofloat(); // JSON turns 1.0 into 1
 			sd.write(value, pair[0]);
 		}
-		local inp = sd.getDeserializationEmulator();
-		if (::MSU.System.Serialization.SerializationMetaData != null)
-			inp.getMetaData().setRealMetaData(::MSU.System.Serialization.SerializationMetaData);
-		_bro.onDeserialize(inp);
+		// The emulator's metadata reports the current save format version, which is the format
+		// the sender just wrote in. (Using the loaded save's metadata could report an older version.)
+		_bro.onDeserialize(sd.getDeserializationEmulator());
 	}
 
 	// The brothers that would fight: not in reserve, in formation order
