@@ -32,6 +32,48 @@ page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co
 	return ret;
 }
 
+// Co-op saves (v0.14.0): a world that was hosted carries the flag BBCoopSave (the host's name),
+// so every save of it is marked. Loading one outside of hosting shows a reminder.
+// Set when the player used Multiplayer > Host a world in this game session
+::BBCoop.HostChosen <- false;
+
+::BBCoop.markCoopSave <- function( _host )
+{
+	if (!::World.Flags.has("BBCoopSave")) ::BBCoop.log("This world is now a co-op save.");
+	::World.Flags.set("BBCoopSave", _host);
+}
+
+// Another real player (not the test bot) was heard from in the last 20 seconds
+::BBCoop.othersOnline <- function()
+{
+	foreach (name, time in ::BBCoop.Seen)
+		if (name != "Bot" && ::Time.getRealTimeF() - time <= 20.0) return true;
+	return false;
+}
+
+::BBCoop.isCoopSave <- function()
+{
+	return ::World.Flags.has("BBCoopSave");
+}
+
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.loadCampaign = @(__original) function( _campaignFileName )
+	{
+		__original(_campaignFileName);
+		try
+		{
+			if (!::BBCoop.isCoopSave()) return;
+			::BBCoop.log("Loaded co-op save " + _campaignFileName + " (hosted by " + ::World.Flags.get("BBCoopSave") + ")");
+			if (!::BBCoop.HostChosen)
+				::BBCoop.notify("This save is co-op specific. To play it with your friends, load it through Multiplayer > Host a world.");
+		}
+		catch (error)
+		{
+			::BBCoop.log("Checking for a co-op save failed: " + error);
+		}
+	}
+});
+
 // When we last heard from each player (any message counts; games send a heartbeat every 5s)
 ::BBCoop.Seen <- {};
 ::BBCoop.isOnline <- function( _name, _seconds = 20.0 )
