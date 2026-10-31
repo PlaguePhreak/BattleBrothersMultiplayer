@@ -518,8 +518,13 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 	button('Connect', function ()
 	{
 		var url = $.trim(urlInput.val()), name = $.trim(nameInput.val());
-		if (url.indexOf('://') === -1) url = 'http://' + url;
-		if (!/:\d+\/?$/.test(url)) url = url.replace(/\/+$/, '') + ':7777';
+		// a bare address ("100.1.2.3") gets the relay's default port; a full URL
+		// (e.g. an https tunnel address) is used exactly as typed
+		if (url.indexOf('://') === -1)
+		{
+			url = 'http://' + url.replace(/\/+$/, '');
+			if (!/:\d+$/.test(url)) url += ':7777';
+		}
 		if (name === '') { self.setJoinStatus('Pick a name first.', true); return; }
 		self.setJoinStatus('Connecting to ' + url + '...', false);
 		SQ.call(self.mSQHandle, 'applyJoinSettings', { relayURL: url, playerName: name }, function (_config)
