@@ -1,5 +1,7 @@
 this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
-	m = {},
+	m = {
+		BotEnabled = false
+	},
 
 	function create()
 	{
@@ -36,6 +38,22 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			type = "hello",
 			payload = { text = "Hello from " + ::BBCoop.getSetting("PlayerName") }
 		});
+	}
+
+	function sendMessage( _type, _payload )
+	{
+		if (!this.isConnected()) return;
+		this.m.JSHandle.asyncCall("send", { type = _type, payload = _payload });
+	}
+
+	function isBotEnabled()
+	{
+		return this.m.BotEnabled;
+	}
+
+	function setBotEnabled( _bool )
+	{
+		this.m.BotEnabled = _bool;
 	}
 
 	function showToast( _text )
@@ -82,8 +100,21 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 
 	function onMessage( _msg )
 	{
+		// messages meant for one player carry a "to" field
+		if (typeof _msg.payload == "table" && ("to" in _msg.payload) && _msg.payload.to != ::BBCoop.getSetting("PlayerName"))
+			return;
+
 		switch (_msg.type)
 		{
+			case "battle_start":
+				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
+				break;
+			case "battle_join":
+				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
+				break;
+			case "battle_result":
+				::BBCoop.Battle.onBattleResult(_msg.from, _msg.payload);
+				break;
 			case "hello":
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;

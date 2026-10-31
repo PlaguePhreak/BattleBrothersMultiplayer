@@ -123,6 +123,7 @@ BBCoopConnection.prototype.join = function (_session)
 			return;
 		}
 		self.mLastSeq = _data.seq;
+		SQ.call(self.mSQHandle, 'setBotEnabled', _data.bot === true);
 		var others = _data.players.filter(function (p) { return p !== self.mConfig.playerName; });
 		self.notify('Joined co-op session. Other players: ' + (others.length ? others.join(', ') : 'none yet'));
 		self.poll(_session);

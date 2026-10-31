@@ -20,7 +20,7 @@ function makeClient(name, pos){
     registerScreen: (n, s) => { screen = s; } };
   ctx.MSUBackendConnection.prototype = { isConnected(){return this.mSQHandle!==null;}, onConnection(h){this.mSQHandle=h;} };
   const sq = { onLog: t=>record(`[${name} log] ${t}`), onNotify: t=>record(`[${name} POPUP] ${t}`),
-    onMessage: m=>record(`[${name} recv] ${m.from} ${m.type} ${JSON.stringify(m.payload)}`), getWorldPosition: ()=>pos() };
+    onMessage: m=>record(`[${name} recv] ${m.from} ${m.type} ${JSON.stringify(m.payload)}`), getWorldPosition: ()=>pos(), setBotEnabled: ()=>null };
   ctx.SQ = { call: (h, fn, arg, cb) => { const r = sq[fn](arg); if (cb) cb(r); } };
   vm.createContext(ctx); vm.runInContext(src, ctx);
   screen.onConnection({}); return screen;

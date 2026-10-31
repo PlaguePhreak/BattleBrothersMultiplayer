@@ -10,7 +10,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -39,7 +39,7 @@ function readBody(req) {
     let data = '';
     req.on('data', (c) => {
       data += c;
-      if (data.length > 1e6) { reject(new Error('body too large')); req.destroy(); }
+      if (data.length > 8e6) { reject(new Error('body too large')); req.destroy(); }
     });
     req.on('end', () => {
       try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); }
@@ -63,7 +63,11 @@ function pushMessage(from, type, payload) {
   const msg = { seq: ++seq, from, type, payload, time: Date.now() };
   messages.push(msg);
   if (messages.length > MAX_MESSAGES) messages.shift();
-  if (type !== 'pos') console.log(`[${new Date().toISOString()}] ${from}: ${type} ${JSON.stringify(payload)}`);
+  if (type !== 'pos') {
+    let text = JSON.stringify(payload);
+    if (text.length > 300) text = text.slice(0, 300) + `... (${text.length} chars)`;
+    console.log(`[${new Date().toISOString()}] ${from}: ${type} ${text}`);
+  }
   for (const w of [...waiting]) w.flush();
   if (BOT && from !== BOT_NAME) botHear(msg);
   return msg;
@@ -79,6 +83,15 @@ function botHear(msg) {
     bot.seed = msg.payload.seed || '';
   } else if (msg.type === 'hello') {
     setTimeout(() => pushMessage(BOT_NAME, 'hello', { text: `Hello back, ${msg.from}!` }), 500);
+  } else if (msg.type === 'battle_start' && msg.payload) {
+    // join with the copy of the host's own brothers that the game sends when the bot is on
+    const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw }));
+    if (!bros.length) return console.log('Bot: battle started, but no company copy was sent');
+    setTimeout(() => pushMessage(BOT_NAME, 'battle_join', { battleID: msg.payload.battleID, to: msg.from, bros }), 3000);
+    console.log(`Bot: joining ${msg.from}'s battle with ${bros.length} brothers in 3s`);
+  } else if (msg.type === 'battle_result' && msg.payload && msg.payload.to === BOT_NAME) {
+    const dead = msg.payload.bros.filter((b) => b.dead).map((b) => b.name);
+    console.log(`Bot: battle over, ${msg.payload.bros.length - dead.length} survived, fallen: ${dead.join(', ') || 'none'}`);
   } else if (msg.type === 'join') {
     setTimeout(() => pushMessage(BOT_NAME, 'join', { modVersion: 'bot', gameVersion: 'bot' }), 300);
   }
@@ -124,7 +137,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
       pushMessage(body.player, 'join', { modVersion: body.modVersion, gameVersion: body.gameVersion });
-      return sendJSON(res, 200, { ok: true, seq, players: activePlayers() });
+      return sendJSON(res, 200, { ok: true, seq, players: activePlayers(), bot: BOT });
     }
 
     if (req.method === 'POST' && url.pathname === '/send') {
