@@ -38,8 +38,12 @@
 		local ret = [];
 		foreach (bro in ::World.getPlayerRoster().getAll())
 		{
-			if (bro.getPlaceInFormation() > 26) continue;
-			if (bro.isInReserves()) continue;
+			// vanilla: formation slots 0-17 fight, the rest are reserves
+			if (bro.getPlaceInFormation() > 17) continue;
+			// isInReserves only exists with Legends
+			local reserve = false;
+			try { reserve = bro.isInReserves(); } catch (error) {}
+			if (reserve) continue;
 			ret.push(bro);
 		}
 		ret.sort(@(a, b) a.getPlaceInFormation() <=> b.getPlaceInFormation());
