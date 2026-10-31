@@ -25,7 +25,7 @@ Battle Brothers has no networking, but the game's UI browser can make HTTP reque
 
 1. Build the mod zip: `python build.py` (writes `dist/mod_bb_coop.zip`), or download it from the release/PR.
 2. Copy `mod_bb_coop.zip` into `Battle Brothers/data/` next to the MSU and Modern Hooks zips.
-3. On one PC, start the relay: `node relay/relay.js` (default port 7777).
+3. On one PC, start the relay: double-click `relay/start-relay.bat` on Windows, or run `node relay/relay.js` (default port 7777). Keep its window open while playing.
 
 ## Testing with two players
 
