@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Battle Brothers Co-op relay. No dependencies: needs only Node.js 16+.
-// Usage: node relay.js [port] [--bot]   (default port 7777)
+// Usage: node relay.js [port] [--bot] [--tunnel] [--password=...] [--address=...]   (default port 7777)
+//   --tunnel  starts cloudflared's free tunnel and builds the invite code from its address
 //   --bot  adds a fake second player ("Bot") whose company circles yours on the
 //          world map and answers hellos, so you can test alone.
 // Both players point the mod's "Relay URL" setting at this machine.
@@ -12,8 +13,9 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const os = require('os');
+const { spawn } = require('child_process');
 
-const VERSION = '0.16.0';
+const VERSION = '0.17.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
 const PROTOCOL = 2;
 const MAX_PLAYERS = 8;
@@ -104,8 +106,82 @@ function detectedAddresses() {
   return out;
 }
 
+// ---- free tunnel (v0.17.0) ----
+// --tunnel starts cloudflared's quick tunnel next to the relay and uses its https address, so the
+// host needs one window. cloudflared-windows-amd64.exe (or cloudflared.exe) goes in the relay
+// folder, or cloudflared on the PATH. A new tunnel run means a new address, so a new invite code.
+const TUNNEL = args.includes('--tunnel') || process.env.BBCOOP_TUNNEL === '1';
+let tunnelAddress = '';
+let tunnelState = TUNNEL ? 'starting' : 'off'; // off | starting | up | missing | down
+let tunnelProc = null, tunnelRestarts = 0;
+
+function findCloudflared() {
+  if (process.env.BBCOOP_CLOUDFLARED) return process.env.BBCOOP_CLOUDFLARED;
+  for (const name of ['cloudflared-windows-amd64.exe', 'cloudflared.exe', 'cloudflared']) {
+    const p = path.join(__dirname, name);
+    if (fs.existsSync(p)) return p;
+  }
+  return 'cloudflared'; // maybe on the PATH
+}
+
+// cloudflared prints its address in a box on stderr: "https://some-words.trycloudflare.com"
+function tunnelAddressIn(text) {
+  const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(text);
+  return m ? m[0] : '';
+}
+
+function startTunnel() {
+  const exe = findCloudflared();
+  tunnelState = 'starting';
+  console.log('Starting the free tunnel (cloudflared)...');
+  try {
+    tunnelProc = spawn(exe, ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  } catch (e) {
+    tunnelMissing(e);
+    return;
+  }
+  const onData = (chunk) => {
+    const found = tunnelAddressIn(String(chunk));
+    if (found && found !== tunnelAddress) {
+      tunnelAddress = found;
+      tunnelState = 'up';
+      console.log(`Tunnel is up: ${tunnelAddress}`);
+      printInvite();
+    }
+  };
+  tunnelProc.stdout.on('data', onData);
+  tunnelProc.stderr.on('data', onData);
+  tunnelProc.on('error', tunnelMissing);
+  tunnelProc.on('exit', (code) => {
+    if (tunnelState === 'missing') return;
+    tunnelProc = null;
+    tunnelAddress = '';
+    tunnelState = 'down';
+    if (shuttingDown) return;
+    if (++tunnelRestarts > 5) { console.log(`The tunnel stopped (code ${code}) and keeps failing. Restart this window to try again.`); return; }
+    console.log(`The tunnel stopped (code ${code}). Starting it again in 5 seconds; your invite code will change.`);
+    setTimeout(startTunnel, 5000);
+  });
+}
+
+function tunnelMissing(e) {
+  tunnelState = 'missing';
+  tunnelProc = null;
+  console.log(`Could not start cloudflared (${e && e.code || e}). Download cloudflared-windows-amd64.exe from https://github.com/cloudflare/cloudflared/releases/latest and put it in ${__dirname}`);
+}
+
+let shuttingDown = false;
+function stopTunnel() {
+  shuttingDown = true;
+  if (tunnelProc) { try { tunnelProc.kill(); } catch (e) {} }
+}
+process.on('exit', stopTunnel);
+process.on('SIGINT', () => { stopTunnel(); process.exit(0); });
+process.on('SIGTERM', () => { stopTunnel(); process.exit(0); });
+
 function bestAddress() {
   if (publicAddress) return publicAddress;
+  if (tunnelAddress) return tunnelAddress;
   const found = detectedAddresses();
   const ts = found.find((f) => f.kind === 'tailscale');
   return ts ? ts.url : '';
@@ -121,7 +197,8 @@ function inviteCode(address, host) {
 function printInvite() {
   const code = inviteCode(bestAddress(), hostCard && hostCard.host);
   if (code) console.log(`Invite code for your friends: ${code}   (address ${bestAddress()})`);
-  else console.log('No invite code yet: no address friends can reach was found. Start the tunnel or Tailscale, or press Ctrl+I in the game and paste your address.');
+  else if (tunnelState === 'starting') console.log('Invite code: waiting for the tunnel address...');
+  else console.log('No invite code yet: no address friends can reach was found. Use start-host.bat (free tunnel) or Tailscale, or press Ctrl+I in the game and paste your address.');
 }
 
 function isLocal(req) {
@@ -475,7 +552,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/invite') {
       if (!isLocal(req)) return sendJSON(res, 403, { error: 'only the host PC can see the invite' });
       const address = bestAddress();
-      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress });
+      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress, tunnel: tunnelState });
     }
 
     // The host pastes the address friends use (e.g. the tunnel URL) in the game
@@ -485,7 +562,7 @@ const server = http.createServer(async (req, res) => {
       publicAddress = normalizeAddress(body.address);
       printInvite();
       const address = bestAddress();
-      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress });
+      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress, tunnel: tunnelState });
     }
 
     if (req.method === 'POST' && url.pathname === '/host') {
@@ -504,7 +581,7 @@ const server = http.createServer(async (req, res) => {
         console.log('Session password set from the host\'s game.');
       }
       if (first) { console.log(`Hosting "${hostCard.name}" for ${hostCard.host}, up to ${maxPlayers()} players.`); printInvite(); }
-      return sendJSON(res, 200, { ok: true, max: maxPlayers(), password: !!PASSWORD });
+      return sendJSON(res, 200, { ok: true, max: maxPlayers(), password: !!PASSWORD, code: inviteCode(bestAddress(), hostCard.host), tunnel: tunnelState });
     }
 
     // everything except /ping needs the session password, when one is set
@@ -614,6 +691,7 @@ if (BOT) setInterval(botTick, 1000);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Battle Brothers Co-op relay v${VERSION} listening on port ${PORT}`);
   console.log(`Same PC: http://127.0.0.1:${PORT}   Other PC on your network: http://<this PC's IP>:${PORT}`);
+  if (TUNNEL) startTunnel();
   printInvite();
   console.log(PASSWORD ? 'Session password is set: players must enter it in the Multiplayer window or Mod Options.' : 'No session password: anyone who can reach this relay can join.');
   if (BOT) console.log(`Bot player enabled (origin: ${BOT_ORIGINS[botOrigin]}, clan: ${BOT_CLAN}). Its company will circle yours once you are on the world map. Pick an origin with --origin=<${Object.keys(BOT_ORIGINS).join('|')}>`);
