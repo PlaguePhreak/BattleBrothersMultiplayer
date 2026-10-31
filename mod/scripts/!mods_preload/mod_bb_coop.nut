@@ -1,6 +1,6 @@
 ::BBCoop <- {
 	ID = "mod_bb_coop",
-	Version = "0.8.0",
+	Version = "0.9.1",
 	Name = "Battle Brothers Co-op"
 };
 

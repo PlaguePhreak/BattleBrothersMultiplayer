@@ -4,9 +4,11 @@ A mod that aims to let two players share one Battle Brothers world map, each run
 
 Battle Brothers has no networking, but the game's UI browser can make HTTP requests. This mod uses that to talk to a small **relay server** that both players connect to.
 
-**Status: v0.8.0, loot for joiners.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
+**Status: v0.9.0, session password.** Each player sees the other's company on the world map, can join the other's battle as reinforcements, and plays their own brothers in it. Target is the vanilla game first; Legends and other mods come later.
 
 ## What it does
+
+- **Session password:** `start-relay.bat` asks for a password (Enter for none), or run `node relay.js --password=...`. Players enter it in the Multiplayer window (or Mod Options). Recommended whenever the relay is reachable from the internet (tunnel or port forward).
 
 - **Loot for joiners: what you kill, you get.** When the host wins, each enemy's gear goes to the player whose brother killed it, gear from a joiner's own fallen brothers goes back to them, and loot no single enemy carried (crowns, the party's stash, ammo, armor parts) is shared by number of kills. A joiner's share lands in their stash; crowns and supplies go straight to their stock. Only allies who are still connected get a share; players who joined against the host get none.
 

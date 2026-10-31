@@ -19,6 +19,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		return {
 			relayURL = ::BBCoop.getSetting("RelayURL"),
 			playerName = ::BBCoop.getSetting("PlayerName"),
+			password = ::BBCoop.getSetting("SessionPassword"),
 			modVersion = ::BBCoop.Version,
 			clan = ::BBCoop.getClan(),
 			dlcs = ::BBCoop.getDLCs(),
@@ -73,6 +74,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		{
 			::BBCoop.Mod.ModSettings.getSetting("RelayURL").set(_data.relayURL);
 			::BBCoop.Mod.ModSettings.getSetting("PlayerName").set(_data.playerName);
+			::BBCoop.Mod.ModSettings.getSetting("SessionPassword").set(_data.password);
 		}
 		catch (error)
 		{
@@ -116,6 +118,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	{
 		::BBCoop.Mod.ModSettings.getSetting("Clan").set(_clan);
 		::BBCoop.notify(_clan == "" ? "You left your clan." : "You are now in the clan " + _clan + ".");
+	}
+
+	// A co-op text field has focus: the game ignores keys until it loses focus
+	function setTyping( _typing )
+	{
+		::BBCoop.Typing = _typing == true;
 	}
 
 	function onLog( _text )
