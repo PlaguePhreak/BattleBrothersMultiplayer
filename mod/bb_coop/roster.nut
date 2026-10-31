@@ -16,8 +16,9 @@
 
 	function colorToHex( _color )
 	{
-		local parts = [_color.R, _color.G, _color.B, _color.A];
-		local hex = "";
+		// "#rrggbb", the same form vanilla passes to createColor (no alpha, no "#" broke the tint)
+		local parts = [_color.R, _color.G, _color.B];
+		local hex = "#";
 		foreach (v in parts)
 		{
 			local n = typeof v == "float" && v <= 1.0 ? (v * 255.0 + 0.5).tointeger() : v.tointeger();
