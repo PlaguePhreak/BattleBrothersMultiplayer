@@ -29,7 +29,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			maxPlayers = ::BBCoop.getSetting("HostMaxPlayers").tointeger(),
 			sessionName = ::BBCoop.getSetting("HostSessionName"),
 			lastServerURL = ::BBCoop.getSetting("LastServerURL"),
-			lastServerHost = ::BBCoop.getSetting("LastServerHost")
+			lastServerHost = ::BBCoop.getSetting("LastServerHost"),
+			coopSaves = ::BBCoop.getCoopSaves()
 		};
 	}
 

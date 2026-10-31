@@ -763,6 +763,26 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 		};
 	}
 
+	// Load screen: saves used in multiplayer say so under their name
+	if (typeof LoadCampaignMenuModule !== 'undefined')
+	{
+		var addEntry = LoadCampaignMenuModule.prototype.addCampaignEntryToList;
+		LoadCampaignMenuModule.prototype.addCampaignEntryToList = function (_data)
+		{
+			try
+			{
+				var screen = window.BBCoopScreen;
+				var saves = screen && screen.mConfig && screen.mConfig.coopSaves;
+				var ids = (typeof CampaignMenuModulesIdentifier !== 'undefined') ? CampaignMenuModulesIdentifier.Campaign : {};
+				var fileKey = ids.FileName || 'fileName', dayKey = ids.DayName || 'dayName';
+				if (saves && _data && saves.indexOf(_data[fileKey]) !== -1 && !_data.isIncompatibleVersion)
+					_data[dayKey] = (_data[dayKey] || '') + ' - Co-op save, host it from Multiplayer';
+			}
+			catch (e) { console.error('BBCoop: could not label a co-op save: ' + e); }
+			return addEntry.apply(this, arguments);
+		};
+	}
+
 	if (typeof NewCampaignMenuModule !== 'undefined')
 	{
 		var show = NewCampaignMenuModule.prototype.show;
