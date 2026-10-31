@@ -219,6 +219,7 @@
 			mr = _p.m.IsMirrored,
 			sp = speed,
 			t = this.packTroops(_p),
+			hp = !_p.isAlliedWithPlayer(),
 			l = [loot.Money, loot.Ammo, loot.Medicine, loot.ArmorParts],
 			inv = clone _p.getInventory()
 		};
@@ -385,7 +386,49 @@
 		this.unpackTroops(l, _payload.t);
 	}
 
+	// An AI party of ours caught another player's ghost. Instead of a fight against an empty
+	// ghost, that player's game starts the fight against its copy of the party.
+	LastAmbush = {},         // host: party id -> time the last ambush was sent
+
+	function onGhostAttacked( _attacker, _ghost )
+	{
+		local owner = _ghost.getFlags().get("BBCoopGhost");
+		if (typeof owner != "string") return;
+		local id = _attacker.getID().tostring();
+		local now = ::Time.getRealTimeF();
+		try { _attacker.stun(20.0); } catch (error) {} // give the other player time to fight it
+		if ((id in this.LastAmbush) && now - this.LastAmbush[id] < 30.0) return;
+		this.LastAmbush[id] <- now;
+		::BBCoop.Connection.sendMessage("world_ambush", { to = owner, id = id, n = _attacker.getName() });
+		::BBCoop.log(_attacker.getName() + " attacks " + owner + "'s company");
+	}
+
 	// ================= joiner =================
+
+	// The host's party caught us: fight our copy of it, as if our own world's AI attacked
+	function onAmbush( _from, _payload )
+	{
+		if (!this.isFromHost(_from) || !this.Following || !this.canTouchWorld()) return;
+		if (!(_payload.id in this.Mirrors)) return;
+		local party = this.Mirrors[_payload.id].Party;
+		if (party == null || party.isNull() || !party.isAlive() || party.isInCombat()) return;
+		local player = ::World.State.getPlayer();
+		if (player == null || player.isInCombat()) return;
+		// positions lag a little behind the host's: make sure it is close enough to fight
+		local pp = player.getPos();
+		if (party.getDistanceTo(player) > ::Const.World.CombatSettings.CombatDistance)
+		{
+			party.setPos(::createVec(pp.X + 20.0, pp.Y + 20.0));
+			this.Mirrors[_payload.id].From = party.getPos();
+			this.Mirrors[_payload.id].To = party.getPos();
+		}
+		local target = party.get();
+		::World.State.setAIEngageCallback(function ()
+		{
+			if (target != null && target.isAlive() && target.onEnteringCombatWithPlayer(false))
+				::World.State.showCombatDialog(false, true, true, null, target.getPos());
+		});
+	}
 
 	function isFromHost( _from )
 	{
@@ -781,12 +824,37 @@
 ::BBCoop.MH.hook("scripts/entity/world/party", function(q) {
 	q.onUpdate = @(__original) function()
 	{
+		if (this.m.Flags != null && this.m.Flags.has("BBCoopGhost"))
+		{
+			this.world_entity.onUpdate(); // ghosts go where their player is, never on their own
+			return;
+		}
 		if (::BBCoop.World.Following && this.m.Flags != null && this.m.Flags.has("BBCoopMirror") && !this.isInCombat())
 		{
 			this.world_entity.onUpdate();
 			return;
 		}
 		return __original();
+	}
+});
+
+::BBCoop.MH.hook("scripts/entity/world/combat_manager", function(q) {
+	q.startCombat = @(__original) function( _p1, _p2 )
+	{
+		try
+		{
+			local p1 = typeof _p1 == "instance" ? _p1.get() : _p1;
+			local p2 = typeof _p2 == "instance" ? _p2.get() : _p2;
+			local g1 = p1.getFlags().has("BBCoopGhost"), g2 = p2.getFlags().has("BBCoopGhost");
+			if (g1 && g2) return;
+			if (g2) { ::BBCoop.World.onGhostAttacked(p1, p2); return; }
+			if (g1) { ::BBCoop.World.onGhostAttacked(p2, p1); return; }
+		}
+		catch (error)
+		{
+			::BBCoop.log("Checking a world fight failed: " + error);
+		}
+		return __original(_p1, _p2);
 	}
 });
 

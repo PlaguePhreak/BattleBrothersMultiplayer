@@ -19,7 +19,7 @@ function req(method, p, body) {
 const send = (from, type, payload) => req('POST', '/send', { from, type, payload });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function check(cond, text) { if (!cond) { console.log('FAIL: ' + text); console.log(out); relay.kill(); process.exit(1); } console.log('ok: ' + text); }
-const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100, n: 'Brigand Raiders', t: [[1, 0, 10, 0, '', 5]] }, { id: '12', x: 300, y: 300, n: 'Wolves', t: [] }], locations: [{ k: 500, at: false, ty: 'location.bandit_camp', n: 'Camp ' + n, t: [] }], settlements: [] });
+const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100, n: 'Brigand Raiders', hp: true, t: [[1, 0, 10, 0, '', 5]] }, { id: '12', x: 300, y: 300, n: 'Caravan', hp: false, t: [] }, { id: '13', x: 900, y: 600, n: 'Wolves', hp: true, t: [] }], locations: [{ k: 500, at: false, ty: 'location.bandit_camp', n: 'Camp ' + n, t: [] }], settlements: [] });
 
 (async () => {
   await sleep(500);
@@ -37,16 +37,25 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   await sleep(300);
   poll = await req('GET', `/poll?player=B&since=${since}`);
   const fromBot = poll.messages.find((m) => m.type === 'world_full' && m.from === 'Bot');
-  check(fromBot && fromBot.payload.to === 'B' && fromBot.payload.parties.length === 2, 'bot hosts the stored world for a joiner');
+  check(fromBot && fromBot.payload.to === 'B' && fromBot.payload.parties.length === 3, 'bot hosts the stored world for a joiner');
 
   await send('B', 'world_party_destroyed', { to: 'Bot', id: '11' });
   await send('B', 'world_location_troops', { to: 'Bot', k: 500, ty: 'location.bandit_camp', t: [[2, 0, 5, 0, '', 6]] });
   await sleep(2500);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   const parties = poll.messages.filter((m) => m.type === 'world_parties' && m.from === 'Bot');
-  check(parties.length === 1 && parties[0].payload.p.join(',') === '12,300,300', 'destroyed party is gone from the bot\'s positions (and only the latest positions are kept)');
+  check(parties.length === 1 && parties[0].payload.p.join(',') === '12,300,300,13,900,600', 'destroyed party is gone from the bot\'s positions (and only the latest positions are kept)');
   const state = JSON.parse(fs.readFileSync(path.join(dir, 'bot-state.json'), 'utf8'));
-  check(state.full.parties.length === 1 && state.full.locations[0].t.length === 1, 'bot-state.json keeps the changed world');
+  check(state.full.parties.length === 2 && state.full.locations[0].t.length === 1, 'bot-state.json keeps the changed world');
+  // hunting: B stands 300 units from the wolves (45 units per 2s); they walk over and attack
+  await send('B', 'pos', { x: 900, y: 900, seed: '123' });
+  let ambush = null;
+  for (let i = 0; i < 25 && !ambush; i++) {
+    await sleep(1000);
+    poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+    ambush = poll.messages.find((m) => m.type === 'world_ambush' && m.payload.to === 'B');
+  }
+  check(ambush && ambush.payload.id === '13', 'hostile party walks to the joiner and attacks');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });

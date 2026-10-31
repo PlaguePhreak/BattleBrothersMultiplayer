@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.10.0';
+const VERSION = '0.11.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
@@ -133,6 +133,8 @@ function rememberWorld(p) {
 // host with it for players who joined the bot's world. Its parties stand still; what a joiner
 // destroys is taken out of the copy, so the round trip can be tested with one game.
 const botFollowers = new Map(); // player -> last time they asked for the world
+const playerPos = new Map();    // player -> { x, y } from their position updates
+const botAmbushed = new Map();  // party id -> time the bot last made it attack
 let botWorldSent = 0, botPartiesSent = 0;
 function botWorldMessage(msg) {
   const p = msg.payload || {};
@@ -144,7 +146,9 @@ function botWorldMessage(msg) {
   }
   if (p.to !== BOT_NAME) return msg.type.startsWith('world_');
   const full = botWorld && botWorld.full;
-  if (msg.type === 'world_request') {
+  if (msg.type === 'world_ambush') {
+    console.log(`Bot: ${p.n} caught the bot's company on ${msg.from}'s map (a player would fight it now)`);
+  } else if (msg.type === 'world_request') {
     if (!full) { console.log(`Bot: ${msg.from} asked for the world, but no host has sent one yet`); return true; }
     botFollowers.set(msg.from, Date.now());
     console.log(`Bot: hosting the world for ${msg.from} (${full.parties.length} parties, ${full.locations.length} locations)`);
@@ -164,6 +168,32 @@ function botWorldMessage(msg) {
   }
   return true;
 }
+// Hostile parties near a joiner walk towards them and attack when they catch up, the way
+// the host's AI would (the host's game sends "world_ambush" when its party reaches the ghost)
+function botHunt(full, now) {
+  for (const [name] of botFollowers) {
+    const pos = playerPos.get(name);
+    if (!pos) continue;
+    for (const party of full.parties) {
+      if (!party.hp) continue;
+      const dx = pos.x - party.x, dy = pos.y - party.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 500) continue;
+      const last = botAmbushed.get(party.id) || 0;
+      if (now - last < 60000) continue;
+      if (dist <= 60) {
+        botAmbushed.set(party.id, now);
+        console.log(`Bot: ${party.n} attacks ${name}`);
+        pushMessage(BOT_NAME, 'world_ambush', { to: name, id: party.id, n: party.n });
+      } else {
+        const step = Math.min(dist - 40, 45);
+        party.x = Math.round(party.x + dx / dist * step);
+        party.y = Math.round(party.y + dy / dist * step);
+      }
+    }
+  }
+}
+
 function botWorldTick() {
   const full = botWorld && botWorld.full;
   if (!full || !botFollowers.size) return;
@@ -177,6 +207,7 @@ function botWorldTick() {
     for (const [name] of botFollowers) pushMessage(BOT_NAME, 'world_full', Object.assign({}, full, { to: name }));
   } else if (now - botPartiesSent >= 2000) {
     botPartiesSent = now;
+    botHunt(full, now);
     const flat = [];
     for (const party of full.parties) flat.push(party.id, party.x, party.y);
     for (const [name] of botFollowers) pushMessage(BOT_NAME, 'world_parties', { to: name, seed: full.seed, p: flat });
@@ -186,6 +217,7 @@ function botWorldTick() {
 function botHear(msg) {
   if (msg.type.startsWith('world_') && botWorldMessage(msg)) return;
   if (msg.type === 'pos' && msg.payload) {
+    playerPos.set(msg.from, { x: msg.payload.x, y: msg.payload.y });
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
@@ -295,6 +327,7 @@ function botTick() {
     x: bot.target.x + Math.cos(bot.angle) * r,
     y: bot.target.y + Math.sin(bot.angle) * r,
     seed: bot.seed,
+    strength: 120, // so the host's enemies go after the bot's company too
     clan: BOT_CLAN,
     origin: botOrigin,
     baseBrush: '',

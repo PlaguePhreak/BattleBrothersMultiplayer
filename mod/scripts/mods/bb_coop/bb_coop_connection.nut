@@ -146,7 +146,11 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			if (player == null) return null;
 			local pos = player.getPos();
 			local brushes = ::BBCoop.Ghosts.getOwnBrushes();
+			local strength = 0.0;
+			try { strength = player.getStrength(); } catch (error) {}
+			if (strength <= 0) strength = ::World.getPlayerRoster().getSize() * 10.0;
 			return {
+				strength = strength,
 				x = pos.X,
 				y = pos.Y,
 				seed = ::BBCoop.Ghosts.getSeed(),
@@ -204,6 +208,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "world_parties":
 				::BBCoop.World.onParties(_msg.from, _msg.payload);
+				break;
+			case "world_ambush":
+				::BBCoop.World.onAmbush(_msg.from, _msg.payload);
 				break;
 			case "world_request":
 				::BBCoop.World.onRequest(_msg.from, _msg.payload);

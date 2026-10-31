@@ -60,10 +60,12 @@
 				LastSeen = now
 			};
 			::BBCoop.notify(_from + "'s company is now on your map.");
+			this.setStrength(party, _payload);
 			return;
 		}
 
 		local e = this.Entries[_from];
+		this.setStrength(e.Party, _payload);
 		e.From = e.Party.getPos();
 		e.To = target;
 		e.StartTime = now;
@@ -80,9 +82,11 @@
 			party.setName(_from + "'s company");
 			party.setDescription("A fellow mercenary company led by " + _from + ", another player.");
 			party.setFaction(::Const.Faction.Player);
-			party.setAttackableByAI(false);
+			// enemies can go after the other player's company: when one catches it, world.nut
+			// tells that player's game to start the fight there instead of fighting the ghost
+			party.setAttackableByAI(true);
 			party.setVisibleInFogOfWar(true);
-			party.getFlags().set("BBCoopGhost", true);
+			party.getFlags().set("BBCoopGhost", _from);
 			this.setBrush(party, "base", "baseBrush" in _payload ? _payload.baseBrush : null, "world_base_07");
 			this.setBrush(party, "body", "bodyBrush" in _payload ? _payload.bodyBrush : null, "figure_mercenary_01");
 			return party;
@@ -92,6 +96,13 @@
 			::BBCoop.log("Could not spawn ghost for " + _from + ": " + error);
 			return null;
 		}
+	}
+
+	// The AI only attacks parties with strength, and weighs it before attacking
+	function setStrength( _party, _payload )
+	{
+		local strength = ("strength" in _payload && _payload.strength != null) ? _payload.strength.tofloat() : 0.0;
+		try { _party.m.Strength = strength; } catch (error) {}
 	}
 
 	function setBrush( _party, _sprite, _brush, _fallback )
@@ -205,7 +216,7 @@
 	q.onDeserialize = @(__original) function( _in )
 	{
 		__original(_in);
-		if (this.getFlags().get("BBCoopGhost"))
+		if (this.getFlags().has("BBCoopGhost"))
 			::BBCoop.Ghosts.Leftovers.push(::WeakTableRef(this));
 	}
 });
