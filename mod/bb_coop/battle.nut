@@ -39,6 +39,7 @@
 		this.Reinforcements.clear();
 		this.JoinedOwners.clear();
 		::BBCoop.Remote.reset();
+		::BBCoop.Loot.onBattleStarted();
 
 		local pos = null;
 		try
@@ -125,6 +126,7 @@
 				bro.setFaction(faction);
 				::Tactical.addEntityToMap(bro, tiles[i].Coords.X, tiles[i].Coords.Y);
 				bro.onCombatStart();
+				if (_side == "ally") ::BBCoop.Loot.recordItems(bro, _owner);
 				this.Reinforcements.push({ key = entry.key, owner = _owner, name = entry.name, side = _side, bro = ::WeakTableRef(bro) });
 				count++;
 			}

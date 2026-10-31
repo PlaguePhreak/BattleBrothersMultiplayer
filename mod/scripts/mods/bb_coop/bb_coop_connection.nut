@@ -176,6 +176,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "session_request":
 				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
 				break;
+			case "battle_loot":
+				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);
+				break;
 			case "battle_over":
 				::BBCoop.Battle.onBattleOver(_msg.from, _msg.payload);
 				break;
