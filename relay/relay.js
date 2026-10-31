@@ -13,11 +13,14 @@ const path = require('path');
 const { URL } = require('url');
 
 const VERSION = '0.15.0';
+// Bumped only when the messages between games change; games with a different protocol can't play together
+const PROTOCOL = 2;
+const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 // --password=... (or the BBCOOP_PASSWORD environment variable): players must enter it to connect
 const pwArg = args.find((a) => a.startsWith('--password='));
-const PASSWORD = (pwArg ? pwArg.slice(11) : process.env.BBCOOP_PASSWORD || '').trim();
+let PASSWORD = (pwArg ? pwArg.slice(11) : process.env.BBCOOP_PASSWORD || '').trim();
 function passwordOK(given) {
   if (!PASSWORD) return true;
   const a = crypto.createHash('sha256').update(String(given || '')).digest();
@@ -65,6 +68,30 @@ function touch(name) {
   const p = players.get(name) || {};
   p.lastSeen = Date.now();
   players.set(name, p);
+}
+
+// The host's session card (v0.14.0): sent by the host's game on this PC, shown to anyone who pings
+let hostCard = null;   // { host, name, company, day, max, modVersion, gameVersion, protocol, dlcs, time }
+
+function isLocal(req) {
+  const a = req.socket.remoteAddress || '';
+  return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
+function maxPlayers() {
+  const m = hostCard ? parseInt(hostCard.max, 10) : MAX_PLAYERS;
+  return Math.max(2, Math.min(MAX_PLAYERS, isNaN(m) ? MAX_PLAYERS : m));
+}
+
+// Players who count towards the cap: connected in the last 30s, the test bot not included
+function countedPlayers() {
+  return activePlayers().filter((n) => n !== BOT_NAME);
+}
+
+function publicCard() {
+  if (!hostCard) return null;
+  const { host, name, company, day, modVersion, gameVersion, protocol, dlcs } = hostCard;
+  return { host, name, company, day, modVersion, gameVersion, protocol, dlcs, max: maxPlayers() };
 }
 
 function activePlayers() {
@@ -385,7 +412,31 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (req.method === 'GET' && url.pathname === '/ping') {
-      return sendJSON(res, 200, { ok: true, version: VERSION, time: Date.now(), password: !!PASSWORD });
+      return sendJSON(res, 200, {
+        ok: true, version: VERSION, protocol: PROTOCOL, time: Date.now(), password: !!PASSWORD,
+        players: countedPlayers().length, max: maxPlayers(), session: publicCard(),
+      });
+    }
+
+    // The host's game on this PC describes its session (only accepted from this PC).
+    // A password typed in the game's Host window replaces the one start-relay.bat asked for.
+    if (req.method === 'POST' && url.pathname === '/host') {
+      if (!isLocal(req)) return sendJSON(res, 403, { error: 'only the host PC can set the session' });
+      const body = await readBody(req);
+      if (!body.host) return sendJSON(res, 400, { error: 'host required' });
+      const first = !hostCard || hostCard.name !== body.name || hostCard.max !== body.max;
+      hostCard = {
+        host: String(body.host).slice(0, 40), name: String(body.name || `${body.host}'s company`).slice(0, 60),
+        company: String(body.company || '').slice(0, 60), day: body.day | 0, max: body.max | 0,
+        modVersion: body.modVersion, gameVersion: body.gameVersion, protocol: body.protocol | 0,
+        dlcs: Array.isArray(body.dlcs) ? body.dlcs.slice(0, 50) : [], time: Date.now(),
+      };
+      if (typeof body.password === 'string' && body.password.trim() !== '' && body.password.trim() !== PASSWORD) {
+        PASSWORD = body.password.trim();
+        console.log('Session password set from the host\'s game.');
+      }
+      if (first) console.log(`Hosting "${hostCard.name}" for ${hostCard.host}, up to ${maxPlayers()} players.`);
+      return sendJSON(res, 200, { ok: true, max: maxPlayers(), password: !!PASSWORD });
     }
 
     // everything except /ping needs the session password, when one is set
@@ -396,6 +447,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/join') {
       const body = await readBody(req);
       if (!body.player) return sendJSON(res, 400, { error: 'player required' });
+      // a different protocol can't play with the host; old games send none
+      if (hostCard && body.player !== hostCard.host && (body.protocol | 0) !== hostCard.protocol) {
+        return sendJSON(res, 409, { error: 'version', hostVersion: hostCard.modVersion, protocol: hostCard.protocol });
+      }
+      // session full: players already connected may come back, nobody new past the host's limit
+      const counted = countedPlayers();
+      if (body.player !== BOT_NAME && !counted.includes(body.player) && counted.length >= maxPlayers()) {
+        console.log(`${body.player} was turned away: session full (${counted.length}/${maxPlayers()}).`);
+        return sendJSON(res, 403, { error: 'full', players: counted.length, max: maxPlayers() });
+      }
       touch(body.player);
       Object.assign(players.get(body.player), { modVersion: body.modVersion, gameVersion: body.gameVersion });
       // warn about mismatched versions: both players must run the same game and mod versions
@@ -406,7 +467,7 @@ const server = http.createServer(async (req, res) => {
         }
       }
       pushMessage(body.player, 'join', { modVersion: body.modVersion, gameVersion: body.gameVersion });
-      return sendJSON(res, 200, { ok: true, seq, boot: BOOT, players: activePlayers(), bot: BOT });
+      return sendJSON(res, 200, { ok: true, seq, boot: BOOT, players: activePlayers(), bot: BOT, max: maxPlayers(), protocol: PROTOCOL });
     }
 
     if (req.method === 'POST' && url.pathname === '/send') {
@@ -441,7 +502,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/status') {
-      return sendJSON(res, 200, { version: VERSION, seq, players: Object.fromEntries(players) });
+      return sendJSON(res, 200, { version: VERSION, protocol: PROTOCOL, seq, max: maxPlayers(), session: publicCard(), players: Object.fromEntries(players) });
     }
 
     sendJSON(res, 404, { error: 'not found' });
