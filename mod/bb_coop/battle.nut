@@ -303,10 +303,13 @@
 	}
 };
 
-::BBCoop.MH.hook("scripts/entity/tactical/tactical_entity_manager", function(q) {
-	q.spawn = @(__original) function( _properties )
+// Hook points: Legends replaces tactical_entity_manager.spawn and tactical_state.onBattleEnded
+// outright (without calling the original), so hooks there never run with Legends installed.
+// initMap and onFinish are left alone by Legends and exist in vanilla.
+::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
+	q.initMap = @(__original) function()
 	{
-		__original(_properties);
+		__original();
 		try
 		{
 			::BBCoop.Battle.onBattleStarted();
@@ -316,10 +319,8 @@
 			::BBCoop.log("onBattleStarted failed: " + error);
 		}
 	}
-});
 
-::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
-	q.onBattleEnded = @(__original) function()
+	q.onFinish = @(__original) function()
 	{
 		try
 		{
