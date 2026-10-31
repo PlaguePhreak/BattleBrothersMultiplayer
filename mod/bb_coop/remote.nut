@@ -62,8 +62,16 @@
 		local size = ::Tactical.getMapSize();
 		local terrain = "", levels = "";
 		local units = [];
-		local alliedTo = null;
-		try { alliedTo = ::World.getPlayerRoster().getAll()[0].getAlliedFactions(); } catch (error) {}
+		// sides are seen from the owner's point of view: they may have joined against us
+		local ownerFaction = ::Const.Faction.Player;
+		foreach (r in ::BBCoop.Battle.Reinforcements)
+		{
+			if (r.owner == _owner && r.bro != null && !r.bro.isNull())
+			{
+				ownerFaction = r.bro.getFaction();
+				break;
+			}
+		}
 
 		for (local y = 0; y < size.Y; y++)
 		{
@@ -84,8 +92,8 @@
 				if (u == null || !u.isAlive()) continue;
 				local side = "enemy";
 				if (this.getOwner(u) == _owner) side = "mine";
-				else if (u.getFaction() == ::Const.Faction.Player || (alliedTo != null && alliedTo.find(u.getFaction()) != null)) side = "ally";
-				if (side == "enemy" && !t.IsVisibleForPlayer) continue;
+				else if (u.getFaction() == ownerFaction || ::World.FactionManager.isAllied(ownerFaction, u.getFaction())) side = "ally";
+				if (!t.IsVisibleForPlayer && side == "enemy" && ownerFaction == ::Const.Faction.Player) continue;
 				local unit = {
 					x = x, y = y,
 					name = u.getName(),

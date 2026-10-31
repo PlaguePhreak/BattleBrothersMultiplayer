@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
@@ -77,6 +77,8 @@ function pushMessage(from, type, payload) {
 
 // ---- fake second player for solo testing ----
 const BOT_NAME = 'Bot';
+// Join the bot's clan (Ctrl+K in game) and it fights on your side; otherwise it joins against you
+const BOT_CLAN = 'Bot Clan';
 const bot = { target: null, seed: '', angle: 0 };
 
 // The bot remembers the last world it saw, so it can act as a host for the Multiplayer
@@ -105,8 +107,9 @@ function botHear(msg) {
     // join with the company the host's game rolled for the bot
     const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));
     if (!bros.length) return console.log('Bot: battle started, but no company copy was sent');
-    setTimeout(() => pushMessage(BOT_NAME, 'battle_join', { battleID: msg.payload.battleID, to: msg.from, bros }), 3000);
-    console.log(`Bot: joining ${msg.from}'s battle with ${bros.length} brothers in 3s`);
+    const side = msg.payload.clan === BOT_CLAN ? 'ally' : 'enemy';
+    setTimeout(() => pushMessage(BOT_NAME, 'battle_join', { battleID: msg.payload.battleID, to: msg.from, bros, side }), 3000);
+    console.log(`Bot: joining ${msg.from}'s battle ${side === 'ally' ? 'as an ally' : 'AGAINST them (not in ' + BOT_CLAN + ')'} with ${bros.length} brothers in 3s`);
   } else if (msg.type === 'battle_result' && msg.payload && msg.payload.to === BOT_NAME) {
     const dead = msg.payload.bros.filter((b) => b.dead).map((b) => b.name);
     console.log(`Bot: battle over, ${msg.payload.bros.length - dead.length} survived, fallen: ${dead.join(', ') || 'none'}`);
@@ -193,6 +196,7 @@ function botTick() {
     x: bot.target.x + Math.cos(bot.angle) * r,
     y: bot.target.y + Math.sin(bot.angle) * r,
     seed: bot.seed,
+    clan: BOT_CLAN,
     baseBrush: '',
     bodyBrush: 'figure_mercenary_02',
   });

@@ -22,7 +22,7 @@ function makeClient(name, pos){
   const sq = { onLog: t=>record(`[${name} log] ${t}`), onNotify: t=>record(`[${name} POPUP] ${t}`),
     onMessage: m=>record(`[${name} recv] ${m.from} ${m.type} ${JSON.stringify(m.payload)}`), getWorldPosition: ()=>pos(), setBotEnabled: ()=>null };
   ctx.SQ = { call: (h, fn, arg, cb) => { const r = sq[fn](arg); if (cb) cb(r); } };
-  vm.createContext(ctx); vm.runInContext(src, ctx);
+  ctx.window = ctx; vm.createContext(ctx); vm.runInContext(src, ctx);
   screen.onConnection({}); return screen;
 }
 setTimeout(run, 500);

@@ -47,13 +47,26 @@
 		}
 		catch (error) {}
 
-		local payload = { battleID = this.HostBattleID, pos = pos };
+		local payload = { battleID = this.HostBattleID, pos = pos, clan = ::BBCoop.getClan(), enemies = this.getEnemyNames() };
 		// The relay's test bot can't make brothers itself, so our game rolls a fresh company for it
 		if (::BBCoop.Connection.isBotEnabled())
 			payload.company <- ::BBCoop.Roster.rollCompany(6);
 
 		::BBCoop.Connection.sendMessage("battle_start", payload);
 		::BBCoop.log("Battle started, told other players (" + this.HostBattleID + ")");
+	}
+
+	// Names of the enemy parties, for the join prompt ("fighting Brigand Raiders")
+	function getEnemyNames()
+	{
+		local ret = [];
+		try
+		{
+			foreach (party in ::Tactical.State.getStrategicProperties().Parties)
+				if (party != null && !party.isAlliedWithPlayer() && ret.find(party.getName()) == null) ret.push(party.getName());
+		}
+		catch (error) {}
+		return ret;
 	}
 
 	function onJoinRequest( _from, _payload )
@@ -71,16 +84,29 @@
 		if (_from in this.JoinedOwners) return;
 		this.JoinedOwners[_from] <- true;
 
-		local spawned = this.spawnReinforcements(_from, _payload.bros);
-		::BBCoop.notify(format("%s's company arrives as reinforcements (%i brothers)! %s plays them.", _from, spawned, _from));
+		local side = ("side" in _payload) && _payload.side == "enemy" ? "enemy" : "ally";
+		local spawned = this.spawnReinforcements(_from, _payload.bros, side);
+		if (side == "enemy")
+			::BBCoop.notify(format("%s's company joins the battle AGAINST you (%i brothers)!", _from, spawned));
+		else
+			::BBCoop.notify(format("%s's company arrives as reinforcements (%i brothers)! %s plays them.", _from, spawned, _from));
 		local active = null;
 		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
 		::BBCoop.Remote.sendView(_from, active);
 	}
 
-	function spawnReinforcements( _owner, _bros )
+	// The hostile faction with the most fighters here; joiners against us fight for it
+	function getEnemyFaction()
 	{
-		local tiles = this.findEdgeTiles(_bros.len());
+		local f = 0;
+		try { f = ::Tactical.Entities.getHostileFactionWithMostInstances(); } catch (error) {}
+		return f > 0 ? f : ::Const.Faction.Bandits;
+	}
+
+	function spawnReinforcements( _owner, _bros, _side = "ally" )
+	{
+		local faction = _side == "enemy" ? this.getEnemyFaction() : ::Const.Faction.Player;
+		local tiles = this.findEdgeTiles(_bros.len(), faction);
 		local count = 0;
 		foreach (i, entry in _bros)
 		{
@@ -99,10 +125,10 @@
 				bro.getFlags().set("BBCoopKey", entry.key);
 				// Guests are player-controlled but stay out of our roster, obituary, score and result screen
 				bro.setGuest(true);
-				bro.setFaction(::Const.Faction.Player);
+				bro.setFaction(faction);
 				::Tactical.addEntityToMap(bro, tiles[i].Coords.X, tiles[i].Coords.Y);
 				bro.onCombatStart();
-				this.Reinforcements.push({ key = entry.key, owner = _owner, name = entry.name, bro = ::WeakTableRef(bro) });
+				this.Reinforcements.push({ key = entry.key, owner = _owner, name = entry.name, side = _side, bro = ::WeakTableRef(bro) });
 				count++;
 			}
 			catch (error)
@@ -113,14 +139,20 @@
 		return count;
 	}
 
-	// Free tiles along the map edge nearest to our own brothers
-	function findEdgeTiles( _count )
+	// Free tiles along the map edge nearest to the side being joined
+	function findEdgeTiles( _count, _faction = 1 )
 	{
 		local size = ::Tactical.getMapSize();
 		local sumX = 0, sumY = 0, n = 0;
-		foreach (bro in ::World.getPlayerRoster().getAll())
+		local group = [];
+		if (_faction == ::Const.Faction.Player) group = ::World.getPlayerRoster().getAll();
+		else
 		{
-			if (!bro.isPlacedOnMap()) continue;
+			try { group = ::Tactical.Entities.getAllHostilesAsArray(); } catch (error) {}
+		}
+		foreach (bro in group)
+		{
+			if (bro == null || !bro.isPlacedOnMap()) continue;
 			local t = bro.getTile();
 			sumX += t.SquareCoords.X;
 			sumY += t.SquareCoords.Y;
@@ -192,8 +224,17 @@
 			byOwner[r.owner].push(entry);
 		}
 
+		local hostWon = false;
+		try
+		{
+			local r = ::Tactical.Entities.getCombatResult();
+			hostWon = r == ::Const.Tactical.CombatResult.EnemyDestroyed || r == ::Const.Tactical.CombatResult.EnemyRetreated;
+		}
+		catch (error) {}
+
 		foreach (owner, results in byOwner)
-			::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = results });
+			::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = results, hostWon = hostWon });
+		::BBCoop.Connection.sendMessage("battle_over", { battleID = battleID });
 
 		// remove the visiting brothers from our game
 		foreach (r in this.Reinforcements)
@@ -207,44 +248,153 @@
 
 	// ================= ally =================
 
+	PendingSide = "ally",
+	LocalEnemies = null,    // world parties we attacked ourselves before joining (removed if our side wins)
+	CombatArgs = null,      // vanilla combat dialog put on hold while the join prompt is open
+	EngageRange = 400.0,    // attacking within this distance of another player's battle offers to join it
+
+	function isClanmate( _clan )
+	{
+		local mine = ::BBCoop.getClan();
+		return mine != "" && _clan != null && _clan == mine;
+	}
+
+	function distanceTo( _pos )
+	{
+		local me = ::World.State.getPlayer().getPos();
+		local dx = me.X - _pos.x, dy = me.Y - _pos.y;
+		return ::Math.pow(dx * dx + dy * dy, 0.5);
+	}
+
+	function describeInvite( _invite )
+	{
+		local text = _invite.host + " is fighting";
+		if (_invite.enemies.len() != 0) text += " " + _invite.enemies.reduce(@(a, b) a + ", " + b);
+		return text;
+	}
+
 	function onBattleStartMessage( _from, _payload )
 	{
 		if (this.isInTactical()) return; // busy with our own fight
 		if (this.PendingRefs != null) return; // already fighting elsewhere
 		if (_payload.pos == null) return;
 
-		local me = null;
-		try { me = ::World.State.getPlayer().getPos(); } catch (error) { return; }
-		local dx = me.X - _payload.pos.x, dy = me.Y - _payload.pos.y;
-		local dist = ::Math.pow(dx * dx + dy * dy, 0.5);
+		local dist = 0.0;
+		try { dist = this.distanceTo(_payload.pos); } catch (error) { return; }
+		local clan = ("clan" in _payload) ? _payload.clan : "";
+		this.Invite = {
+			host = _from, battleID = _payload.battleID, time = ::Time.getRealTimeF(), pos = _payload.pos, clan = clan,
+			enemies = ("enemies" in _payload) ? _payload.enemies : []
+		};
 		if (dist > this.JoinRange)
 		{
 			::BBCoop.log(format("%s started a battle %.0f units away (join range %.0f)", _from, dist, this.JoinRange));
 			return;
 		}
-		this.Invite = { host = _from, battleID = _payload.battleID, time = ::Time.getRealTimeF() };
-		::BBCoop.notify(_from + " is in a battle nearby! Press Ctrl+B to join as reinforcements.");
+		this.showJoinPrompt(this.describeInvite(this.Invite) + " nearby.", false);
 	}
 
-	function acceptInvite()
+	// Clanmates only get "join"; everyone else picks a side
+	function showJoinPrompt( _text, _fromEngage )
 	{
-		if (this.Invite == null || ::Time.getRealTimeF() - this.Invite.time > 300.0)
+		local invite = this.Invite;
+		local options = [];
+		if (this.isClanmate(invite.clan))
 		{
-			::BBCoop.notify("There is no battle nearby to join.");
+			_text += " They are in your clan.";
+			options.push({ id = "ally", label = "Join as " + invite.host + "'s ally" });
+		}
+		else
+		{
+			options.push({ id = "ally", label = "Join on " + invite.host + "'s side" });
+			options.push({ id = "enemy", label = "Join against " + invite.host });
+		}
+		options.push({ id = _fromEngage ? "own" : "no", label = _fromEngage ? "Fight on my own" : "Stay out" });
+		::BBCoop.Connection.showPrompt({ id = "join:" + invite.battleID, title = "Battle nearby", text = _text, options = options });
+	}
+
+	function onPromptChoice( _id, _choice )
+	{
+		if (_id.find("join:") != 0) return;
+		local fromEngage = this.CombatArgs != null;
+		if (_choice == "ally" || _choice == "enemy")
+		{
+			if (fromEngage) this.LocalEnemies = this.CombatArgs.enemies;
+			this.CombatArgs = null;
+			if (!this.acceptInvite(_choice)) this.LocalEnemies = null;
 			return;
 		}
+		if (_choice == "own" && fromEngage)
+		{
+			local args = this.CombatArgs;
+			this.CombatArgs = null;
+			this.Invite = null; // don't ask again for this fight
+			::World.State.showCombatDialog(args.a, args.b, args.c, args.d, args.e);
+		}
+	}
+
+	function onBattleOver( _from, _payload )
+	{
+		if (this.Invite != null && this.Invite.battleID == _payload.battleID)
+		{
+			this.Invite = null;
+			::BBCoop.Connection.closePrompt("join:" + _payload.battleID);
+		}
+	}
+
+	// Called from the combat dialog hook: we are about to fight next to someone else's battle
+	function interceptCombat( _a, _b, _c, _d, _e )
+	{
+		if (this.CombatArgs != null || this.PendingRefs != null) return true; // prompt open or already away fighting
+		if (this.Invite == null || ::Time.getRealTimeF() - this.Invite.time > 900.0) return false;
+		local dist = 9999.0;
+		try { dist = this.distanceTo(this.Invite.pos); } catch (error) {}
+		if (dist > this.EngageRange) return false;
+
+		local enemies = [];
+		try
+		{
+			local pos = _e != null ? _e : ::World.State.getPlayer().getPos();
+			foreach (party in ::World.getAllEntitiesAtPos(pos, ::Const.World.CombatSettings.CombatPlayerDistance))
+			{
+				if (party.isAlive() && !party.isPlayerControlled() && !party.isAlliedWithPlayer() && !party.isLocation())
+					enemies.push(::WeakTableRef(party));
+			}
+		}
+		catch (error) {}
+
+		this.CombatArgs = { a = _a, b = _b, c = _c, d = _d, e = _e, enemies = enemies };
+		try { ::World.State.setPause(true); } catch (error) {}
+		this.showJoinPrompt(this.describeInvite(this.Invite) + " right here. Join their battle instead of starting your own?", true);
+		return true;
+	}
+
+	// _side: "ally", "enemy", or null (Ctrl+B: ally for clanmates and by default)
+	function acceptInvite( _side )
+	{
+		if (this.Invite == null || ::Time.getRealTimeF() - this.Invite.time > 900.0)
+		{
+			::BBCoop.notify("There is no battle nearby to join.");
+			return false;
+		}
+		if (_side == null) _side = "ally";
 		local packed = ::BBCoop.Roster.packCompany(::BBCoop.getSetting("PlayerName"));
 		if (packed.bros.len() == 0)
 		{
 			::BBCoop.notify("None of your brothers can fight.");
-			return;
+			return false;
 		}
 		this.PendingRefs = packed.refs;
 		this.PendingHost = this.Invite.host;
-		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros });
+		this.PendingSide = _side;
+		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros, side = _side });
 		this.Invite = null;
 		try { ::World.State.setPause(true); } catch (error) {}
-		::BBCoop.notify(format("Your company marches into %s's battle. Results arrive when it ends.", this.PendingHost));
+		if (_side == "enemy")
+			::BBCoop.notify(format("Your company attacks %s! Results arrive when the battle ends.", this.PendingHost));
+		else
+			::BBCoop.notify(format("Your company marches into %s's battle. Results arrive when it ends.", this.PendingHost));
+		return true;
 	}
 
 	// Same bookkeeping vanilla does for a brother lost in battle
@@ -305,7 +455,28 @@
 		this.PendingRefs = null;
 		this.PendingHost = null;
 
-		local text = format("The battle with %s is over. %i of your brothers came back", _from, survived);
+		// We fought next to the host against the parties we had attacked ourselves: if the host's side
+		// won, those parties are beaten in our world too
+		local hostWon = ("hostWon" in _payload) && _payload.hostWon;
+		local ourSideWon = this.PendingSide == "enemy" ? !hostWon : hostWon;
+		if (this.LocalEnemies != null && this.PendingSide == "ally" && hostWon)
+		{
+			foreach (ref in this.LocalEnemies)
+			{
+				if (ref == null || ref.isNull()) continue;
+				try
+				{
+					local party = ref.get();
+					if (!party.isAlive()) continue;
+					if ("fadeOutAndDie" in party) party.fadeOutAndDie();
+					else party.die();
+				}
+				catch (error) { ::BBCoop.log("Could not remove a beaten party: " + error); }
+			}
+		}
+		this.LocalEnemies = null;
+
+		local text = format("The battle with %s is over, your side %s. %i of your brothers came back", _from, ourSideWon ? "won" : "lost", survived);
 		if (died.len() != 0) text += ". Fallen: " + died.reduce(@(a, b) a + ", " + b);
 		::BBCoop.notify(text + ".");
 	}
@@ -339,5 +510,23 @@
 			::BBCoop.log("onBattleEnded failed: " + error);
 		}
 		__original();
+	}
+});
+
+// Attacking (or being attacked) right next to another player's battle offers to join it instead
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.showCombatDialog = @(__original) function( _isPlayerInitiated = true, _isCombatantsVisible = true, _allowFormationPicking = true, _properties = null, _pos = null )
+	{
+		local intercepted = false;
+		try
+		{
+			intercepted = ::BBCoop.Battle.interceptCombat(_isPlayerInitiated, _isCombatantsVisible, _allowFormationPicking, _properties, _pos);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Join check failed: " + error);
+		}
+		if (intercepted) return;
+		return __original(_isPlayerInitiated, _isCombatantsVisible, _allowFormationPicking, _properties, _pos);
 	}
 });

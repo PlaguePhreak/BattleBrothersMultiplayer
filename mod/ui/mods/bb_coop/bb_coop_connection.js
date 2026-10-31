@@ -150,6 +150,7 @@ BBCoopConnection.prototype.poll = function (_session)
 			{
 				var msg = _data.messages[i];
 				if (msg.from === self.mConfig.playerName) continue;
+				self.notePlayer(msg);
 				if (self.handleBattleMessage(msg)) continue;
 				SQ.call(self.mSQHandle, 'onMessage', msg);
 			}
@@ -544,6 +545,15 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 {
 	if (!this.mJoinWaiting) return;
 	if (_info.error) { this.setJoinStatus(_from + ': ' + _info.error, true); return; }
+	if (_info.dlcs && this.mConfig.dlcs)
+	{
+		var mine = this.mConfig.dlcs.join(', ') || 'none', theirs = _info.dlcs.join(', ') || 'none';
+		if (mine !== theirs)
+		{
+			this.setJoinStatus('Your DLCs differ from ' + _from + "'s, so your maps would not match. " + _from + ': ' + theirs + '. You: ' + mine + '.', true);
+			return;
+		}
+	}
 	this.closeJoinWindow();
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	this.showToast('Joining ' + _from + "'s world. Pick your origin; the map seed is set to theirs.");
@@ -597,6 +607,103 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 		};
 	}
 })();
+// ---------------------------------------------------------------------------
+// Prompts (join a nearby battle, pick a side) and the clan window.
+
+BBCoopConnection.prototype.makeWindow = function (_title, _width)
+{
+	var overlay = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '0', top: '0', right: '0', bottom: '0', 'z-index': 99600,
+		background: 'rgba(0,0,0,0.55)', color: '#e8dcc0', 'font-size': '1.7rem'
+	}).appendTo($('body'));
+	var box = $('<div/>').css({
+		position: 'absolute', left: '50%', top: '25%', width: _width + 'rem', 'margin-left': (-_width / 2) + 'rem',
+		background: 'rgba(20,16,10,0.97)', border: '0.2rem solid #8a6d3b', padding: '2rem'
+	}).appendTo(overlay);
+	$('<div/>').text(_title).css({ 'font-size': '2.4rem', color: '#d8b56a', 'margin-bottom': '1.2rem' }).appendTo(box);
+	return { overlay: overlay, box: box };
+};
+
+BBCoopConnection.prototype.makeButton = function (_parent, _label, _onClick, _block)
+{
+	return $('<div/>').text(_label).css({
+		display: _block ? 'block' : 'inline-block', padding: '0.6rem 1.4rem', margin: '0.4rem 1rem 0.4rem 0', cursor: 'pointer',
+		border: '0.1rem solid #8a6d3b', background: 'rgba(255,255,255,0.06)'
+	}).click(_onClick).appendTo(_parent);
+};
+
+// _prompt: { id, title, text, options: [{ id, label }] }; the choice goes back to Squirrel
+BBCoopConnection.prototype.showPrompt = function (_prompt)
+{
+	var self = this;
+	this.closePrompt(null);
+	var w = this.makeWindow(_prompt.title, 60);
+	$('<div/>').text(_prompt.text).css('margin-bottom', '1.4rem').appendTo(w.box);
+	for (var i = 0; i < _prompt.options.length; i++)
+	{
+		(function (_option)
+		{
+			self.makeButton(w.box, _option.label, function ()
+			{
+				self.closePrompt(null);
+				SQ.call(self.mSQHandle, 'onPromptChoice', { id: _prompt.id, choice: _option.id });
+			}, true);
+		})(_prompt.options[i]);
+	}
+	this.mPrompt = { id: _prompt.id, window: w.overlay };
+};
+
+// _id null closes whatever prompt is open
+BBCoopConnection.prototype.closePrompt = function (_id)
+{
+	if (!this.mPrompt) return;
+	if (_id !== null && this.mPrompt.id !== _id) return;
+	this.mPrompt.window.remove();
+	this.mPrompt = null;
+	if (_id !== null) this.showToast('That battle is over.');
+};
+
+// Everyone's clan, learned from their position updates
+BBCoopConnection.prototype.notePlayer = function (_msg)
+{
+	if (!this.mPlayers) this.mPlayers = {};
+	if (_msg.type === 'pos' && _msg.payload) this.mPlayers[_msg.from] = { clan: _msg.payload.clan || '', seen: new Date().getTime() };
+};
+
+BBCoopConnection.prototype.openClanWindow = function (_myClan)
+{
+	var self = this;
+	if (this.mClanWindow) { this.mClanWindow.remove(); this.mClanWindow = null; return; }
+	var w = this.makeWindow('Clan', 60);
+	this.mClanWindow = w.overlay;
+	var close = function () { if (self.mClanWindow) self.mClanWindow.remove(); self.mClanWindow = null; };
+	var setClan = function (_name) { SQ.call(self.mSQHandle, 'setClan', _name); close(); };
+
+	$('<div/>').text(_myClan ? 'Your clan: ' + _myClan : "You're not in a clan.").css('margin-bottom', '1rem').appendTo(w.box);
+	$('<div/>').text('Clanmates always fight on the same side. Anyone else gets to choose a side when joining your battles.').css({ color: '#a89c80', 'margin-bottom': '1.2rem' }).appendTo(w.box);
+
+	var input = $('<input type="text"/>').val(_myClan || '').attr('placeholder', 'Clan name').css({
+		width: '60%', 'font-size': '1.8rem', padding: '0.5rem', background: '#0d0b08', color: '#f0e6cc', border: '0.1rem solid #8a6d3b'
+	}).appendTo(w.box);
+	this.makeButton(w.box, _myClan ? 'Rename' : 'Create', function () { var n = $.trim(input.val()); if (n !== '') setClan(n); });
+	if (_myClan) this.makeButton(w.box, 'Leave clan', function () { setClan(''); });
+
+	$('<div/>').text('Players online').css({ 'font-size': '2rem', color: '#d8b56a', margin: '1.6rem 0 0.6rem 0' }).appendTo(w.box);
+	var now = new Date().getTime(), any = false;
+	for (var name in (this.mPlayers || {}))
+	{
+		var p = this.mPlayers[name];
+		if (now - p.seen > 30000 || name === (this.mConfig && this.mConfig.playerName)) continue;
+		any = true;
+		var row = $('<div/>').css('margin', '0.4rem 0').appendTo(w.box);
+		$('<span/>').text(name + (p.clan ? ' (clan ' + p.clan + ')' : ' (no clan)') + '  ').appendTo(row);
+		if (p.clan && p.clan !== _myClan)
+			(function (_clan) { self.makeButton(row, 'Join ' + _clan, function () { setClan(_clan); }); })(p.clan);
+	}
+	if (!any) $('<div/>').text('Nobody else is on the world map right now.').css('color', '#a89c80').appendTo(w.box);
+	$('<div/>').css('height', '1rem').appendTo(w.box);
+	this.makeButton(w.box, 'Close', close);
+};
 
 window.BBCoopScreen = new BBCoopConnection();
 registerScreen("BBCoopConnection", window.BBCoopScreen);

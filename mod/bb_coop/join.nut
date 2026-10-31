@@ -23,7 +23,7 @@
 			return;
 		}
 		local pos = player.getPos();
-		::BBCoop.Connection.sendMessage("session_info", { to = _from, seed = seed, x = pos.X, y = pos.Y });
+		::BBCoop.Connection.sendMessage("session_info", { to = _from, seed = seed, x = pos.X, y = pos.Y, dlcs = ::BBCoop.getDLCs() });
 		::BBCoop.notify(_from + " is joining your world.");
 	}
 

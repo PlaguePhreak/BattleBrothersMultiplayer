@@ -20,6 +20,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			relayURL = ::BBCoop.getSetting("RelayURL"),
 			playerName = ::BBCoop.getSetting("PlayerName"),
 			modVersion = ::BBCoop.Version,
+			clan = ::BBCoop.getClan(),
+			dlcs = ::BBCoop.getDLCs(),
 			gameVersion = ::GameInfo.getVersionNumber()
 		};
 	}
@@ -85,6 +87,32 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	function showPrompt( _prompt )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("showPrompt", _prompt);
+	}
+
+	function closePrompt( _id )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("closePrompt", _id);
+	}
+
+	function onPromptChoice( _data )
+	{
+		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
+	}
+
+	function openClanWindow()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("openClanWindow", ::BBCoop.getClan());
+	}
+
+	function setClan( _clan )
+	{
+		::BBCoop.Mod.ModSettings.getSetting("Clan").set(_clan);
+		::BBCoop.notify(_clan == "" ? "You left your clan." : "You are now in the clan " + _clan + ".");
+	}
+
 	function onLog( _text )
 	{
 		::BBCoop.log(_text);
@@ -109,6 +137,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				x = pos.X,
 				y = pos.Y,
 				seed = ::BBCoop.Ghosts.getSeed(),
+				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
 				bodyBrush = brushes.bodyBrush
 			};
@@ -135,6 +164,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "session_request":
 				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
+				break;
+			case "battle_over":
+				::BBCoop.Battle.onBattleOver(_msg.from, _msg.payload);
 				break;
 			case "battle_order":
 				::BBCoop.Remote.onOrder(_msg.from, _msg.payload);
