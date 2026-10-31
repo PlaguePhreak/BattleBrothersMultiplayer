@@ -6,6 +6,8 @@ page.addStringSetting("PlayerName", "Player", "Player name", "Shown to the other
 local joinRange = page.addRangeSetting("JoinRange", 600, 100, 2000, 50, "Battle join range", "How close (in world units) your company must be to another player's battle to join it as reinforcements.");
 joinRange.addCallback(function( _value ) { ::BBCoop.Battle.JoinRange = _value.tofloat(); });
 page.addStringSetting("Clan", "", "Clan", "Players in the same clan always fight on the same side. Easier to set with the clan window (Ctrl+K).");
+page.addStringSetting("HostSessionName", "", "Session name (hosting)", "Name of the session you host, shown to players who join. Empty: <your name>'s company.");
+page.addRangeSetting("HostMaxPlayers", 8, 2, 8, 1, "Max players (hosting)", "How many players can be in a session you host, you included.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 
 ::BBCoop.getSetting <- function( _id )

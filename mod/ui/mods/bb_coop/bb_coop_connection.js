@@ -92,6 +92,7 @@ BBCoopConnection.prototype.start = function (_config)
 	var session = this.mSessionId;
 	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
 	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
+	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
 
 	this.log('Connecting to relay ' + _config.relayURL + ' as ' + _config.playerName);
 	var started = new Date().getTime();
@@ -105,8 +106,13 @@ BBCoopConnection.prototype.start = function (_config)
 		}
 		var ms = new Date().getTime() - started;
 		self.notify('Relay reachable (' + ms + ' ms round trip, relay v' + _data.version + ').');
-		self.join(session);
+		if (self.mJoinWaiting && _data.session) self.setJoinStatus('Found ' + self.describeSession(_data) + '. Joining...', false);
 		self.testWebSocket();
+		if (!_config.hosting) { self.join(session); return; }
+		// the host describes its session to its own relay first (this also sets the password
+		// typed in the Host window), then joins like everyone else
+		self.sendHostCard(session, function () { self.join(session); });
+		self.mHostTimer = setInterval(function () { self.sendHostCard(session, null); }, 10000);
 	});
 };
 
@@ -116,10 +122,24 @@ BBCoopConnection.prototype.join = function (_session)
 	this.request('POST', '/join', {
 		player: this.mConfig.playerName,
 		modVersion: this.mConfig.modVersion,
-		gameVersion: this.mConfig.gameVersion
+		gameVersion: this.mConfig.gameVersion,
+		protocol: this.mConfig.protocol
 	}, function (_status, _data)
 	{
 		if (_session !== self.mSessionId) return;
+		if (_status === 403 && _data && _data.error === 'full')
+		{
+			self.notify('The session is full (' + _data.players + ' / ' + _data.max + ' players).');
+			if (self.mJoinWaiting) self.setJoinStatus('The session is full (' + _data.players + ' / ' + _data.max + ' players). Try again when someone leaves.', true);
+			return;
+		}
+		if (_status === 409 && _data && _data.error === 'version')
+		{
+			var text = 'The host runs co-op mod ' + _data.hostVersion + ', which does not work with yours (' + self.mConfig.modVersion + '). Both players need the same version.';
+			self.notify(text);
+			if (self.mJoinWaiting) self.setJoinStatus(text, true);
+			return;
+		}
 		if (_status === 401)
 		{
 			self.notify(self.mConfig.password ? 'Wrong session password for this relay.' : 'This relay needs a session password. Enter it in the Multiplayer window or Mod Options.');
@@ -183,6 +203,42 @@ BBCoopConnection.prototype.poll = function (_session)
 			if (self.mPollFails >= 3 && !self.mRelayDown) { self.mRelayDown = true; self.notify('Lost the connection to the relay. Retrying...'); }
 		}
 		self.mPollTimer = setTimeout(function () { self.poll(_session); }, delay);
+	});
+};
+
+// "Aaron's company, day 34, 2 / 8 players" from a /ping answer
+BBCoopConnection.prototype.describeSession = function (_ping)
+{
+	var c = _ping.session;
+	var text = c.name + (c.host && c.name.indexOf(c.host) === -1 ? ' (hosted by ' + c.host + ')' : '');
+	if (c.day) text += ', day ' + c.day;
+	return text + ', ' + _ping.players + ' / ' + _ping.max + ' players';
+};
+
+// Host only: sends the session card (name, day, max players, versions, DLCs) to the relay on this PC
+BBCoopConnection.prototype.sendHostCard = function (_session, _done)
+{
+	var self = this;
+	if (_session !== this.mSessionId || this.mSQHandle === null) return;
+	SQ.call(this.mSQHandle, 'getHostCard', null, function (_card)
+	{
+		// not on the world map yet (main menu, campaign screens): announce what we know
+		var card = _card || self.mLastHostCard || {
+			host: self.mConfig.playerName, name: self.mConfig.sessionName || (self.mConfig.playerName + "'s company"),
+			max: self.mConfig.maxPlayers, modVersion: self.mConfig.modVersion, gameVersion: self.mConfig.gameVersion,
+			protocol: self.mConfig.protocol, dlcs: self.mConfig.dlcs, day: 0, company: ''
+		};
+		if (_card) self.mLastHostCard = _card;
+		card.password = self.mConfig.password || '';
+		self.request('POST', '/host', card, function (_status)
+		{
+			if (_status !== 200 && !self.mHostCardFailed)
+			{
+				self.mHostCardFailed = true;
+				self.log('Could not describe the session to the relay (status ' + _status + ').');
+			}
+			if (_done) _done();
+		});
 	});
 };
 
@@ -551,6 +607,76 @@ BBCoopConnection.prototype.openJoinWindow = function ()
 	this.mJoinWindow = overlay;
 };
 
+// Multiplayer button: host a world or join one
+BBCoopConnection.prototype.openMultiplayerWindow = function ()
+{
+	var self = this;
+	if (this.mJoinWindow || this.mHostWindow || this.mMultiplayerWindow) return;
+	var w = this.makeWindow('Multiplayer', 44);
+	this.mMultiplayerWindow = w.overlay;
+	var close = function () { w.overlay.remove(); self.mMultiplayerWindow = null; };
+	$('<div/>').text('Host a world on this PC (start-relay.bat must be running), or join a friend\'s.').css({ color: '#a89c80', 'margin-bottom': '1.2rem' }).appendTo(w.box);
+	this.makeButton(w.box, 'Host a world', function () { close(); self.openHostWindow(); });
+	this.makeButton(w.box, 'Join a world', function () { close(); self.openJoinWindow(); });
+	this.makeButton(w.box, 'Cancel', close);
+};
+
+// Host window: the host names the session, picks how many can join and which world is played
+BBCoopConnection.prototype.openHostWindow = function ()
+{
+	var self = this;
+	if (this.mHostWindow) return;
+	var cfg = this.mConfig || { playerName: 'Player', maxPlayers: 8 };
+	var w = this.makeWindow('Multiplayer: host a world', 56);
+	this.mHostWindow = w.overlay;
+	var box = w.box;
+	var close = function () { if (self.mHostWindow) self.mHostWindow.remove(); self.mHostWindow = null; self.setTyping(false); };
+	var label = function (_text) { $('<div/>').text(_text).css({ 'margin-bottom': '0.4rem', color: '#a89c80' }).appendTo(box); };
+	var field = function (_label, _value)
+	{
+		label(_label);
+		return self.makeInput(box, _value, '100%', null, close).css('margin-bottom', '1.2rem');
+	};
+	var nameInput = field('Your name', cfg.playerName);
+	var sessionInput = field('Session name (empty: "<your name>\'s company")', cfg.sessionName || '');
+	var passwordInput = field('Session password (optional; friends enter the same one)', cfg.password || '');
+	passwordInput.attr('type', 'password');
+
+	label('Max players, you included (2 to 8)');
+	var max = Math.max(2, Math.min(8, parseInt(cfg.maxPlayers, 10) || 8));
+	var maxRow = $('<div/>').css('margin-bottom', '1.2rem').appendTo(box);
+	var stepper = function (_text, _delta)
+	{
+		return $('<div/>').text(_text).css({
+			display: 'inline-block', width: '3rem', 'text-align': 'center', cursor: 'pointer',
+			border: '0.1rem solid #8a6d3b', background: 'rgba(255,255,255,0.06)'
+		}).click(function () { max = Math.max(2, Math.min(8, max + _delta)); maxText.text(max); }).appendTo(maxRow);
+	};
+	stepper('-', -1);
+	var maxText = $('<div/>').text(max).css({ display: 'inline-block', width: '4rem', 'text-align': 'center', 'font-size': '2rem' }).appendTo(maxRow);
+	stepper('+', 1);
+
+	var status = $('<div/>').css({ 'min-height': '2.4rem', 'margin-bottom': '1rem' }).appendTo(box);
+	label('World');
+	var host = function (_which)
+	{
+		var name = $.trim(nameInput.val());
+		if (name === '') { status.text('Pick a name first.').css('color', '#e07060'); return; }
+		SQ.call(self.mSQHandle, 'applyHostSettings', {
+			playerName: name, sessionName: $.trim(sessionInput.val()), maxPlayers: max, password: $.trim(passwordInput.val())
+		}, function (_config)
+		{
+			close();
+			self.start(_config);
+			self.showToast(_which === 'load' ? 'Hosting. Pick the save to play.' : 'Hosting. Set up the new campaign.');
+			SQ.call(self.mSQHandle, 'openHostWorld', _which);
+		});
+	};
+	this.makeButton(box, 'New campaign', function () { host('new'); });
+	this.makeButton(box, 'Load a save', function () { host('load'); });
+	this.makeButton(box, 'Cancel', close);
+};
+
 BBCoopConnection.prototype.closeJoinWindow = function ()
 {
 	if (this.mJoinWindow) this.mJoinWindow.remove();
@@ -614,7 +740,7 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 				row.append(layout);
 				layout.createTextButton('Multiplayer', function ()
 				{
-					if (window.BBCoopScreen) window.BBCoopScreen.openJoinWindow();
+					if (window.BBCoopScreen) window.BBCoopScreen.openMultiplayerWindow();
 				}, '', 4);
 				// right below "New Campaign"
 				var first = this.mButtonContainer.children('.row').first();
