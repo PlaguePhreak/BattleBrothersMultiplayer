@@ -83,8 +83,8 @@
 			party.setAttackableByAI(false);
 			party.setVisibleInFogOfWar(true);
 			party.getFlags().set("BBCoopGhost", true);
-			this.setBrush(party, "base", "base" in _payload ? _payload.base : null, "world_base_07");
-			this.setBrush(party, "body", "body" in _payload ? _payload.body : null, "figure_mercenary_01");
+			this.setBrush(party, "base", "baseBrush" in _payload ? _payload.baseBrush : null, "world_base_07");
+			this.setBrush(party, "body", "bodyBrush" in _payload ? _payload.bodyBrush : null, "figure_mercenary_01");
 			return party;
 		}
 		catch (error)
@@ -154,12 +154,13 @@
 	// Our own company's brushes, so the other player's ghost of us looks like our company
 	function getOwnBrushes()
 	{
-		local ret = { base = "", body = "" };
+		local ret = { baseBrush = "", bodyBrush = "" }; // note: "base" is a Squirrel keyword
+
 		try
 		{
 			local player = ::World.State.getPlayer();
-			if (player.hasSprite("base")) ret.base = player.getSprite("base").getBrush().Name;
-			if (player.hasSprite("body")) ret.body = player.getSprite("body").getBrush().Name;
+			if (player.hasSprite("base")) ret.baseBrush = player.getSprite("base").getBrush().Name;
+			if (player.hasSprite("body")) ret.bodyBrush = player.getSprite("body").getBrush().Name;
 		}
 		catch (error) {}
 		return ret;

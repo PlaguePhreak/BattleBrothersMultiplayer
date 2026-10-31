@@ -93,8 +93,8 @@ function botTick() {
     x: bot.target.x + Math.cos(bot.angle) * r,
     y: bot.target.y + Math.sin(bot.angle) * r,
     seed: bot.seed,
-    base: '',
-    body: 'figure_mercenary_02',
+    baseBrush: '',
+    bodyBrush: 'figure_mercenary_02',
   });
 }
 

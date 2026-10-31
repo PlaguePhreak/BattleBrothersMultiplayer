@@ -70,8 +70,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				x = pos.X,
 				y = pos.Y,
 				seed = ::BBCoop.Ghosts.getSeed(),
-				base = brushes.base,
-				body = brushes.body
+				baseBrush = brushes.baseBrush,
+				bodyBrush = brushes.bodyBrush
 			};
 		}
 		catch (error)
