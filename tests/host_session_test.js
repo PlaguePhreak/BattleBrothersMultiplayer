@@ -30,7 +30,7 @@ function makeClient(name, card) {
     onMessage: () => null, getWorldPosition: () => null, setBotEnabled: () => null, getHostCard: () => card };
   ctx.SQ = { call: (h, fn, arg, cb) => { const r = sq[fn](arg); if (cb) cb(r); } };
   ctx.window = ctx; vm.createContext(ctx); vm.runInContext(src, ctx);
-  screen.onConnection({}); return screen;
+  screen.onConnection({}); screen.showToast = (t) => record(`[toast] ${t}`); return screen;
 }
 function get(p) {
   return new Promise((ok) => http.get(`http://127.0.0.1:${PORT}${p}`, (res) => { let d = ''; res.on('data', (c) => d += c); res.on('end', () => ok({ status: res.statusCode, data: JSON.parse(d) })); }));

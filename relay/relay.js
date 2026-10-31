@@ -11,8 +11,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const os = require('os');
 
-const VERSION = '0.15.0';
+const VERSION = '0.16.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
 const PROTOCOL = 2;
 const MAX_PLAYERS = 8;
@@ -72,6 +73,56 @@ function touch(name) {
 
 // The host's session card (v0.14.0): sent by the host's game on this PC, shown to anyone who pings
 let hostCard = null;   // { host, name, company, day, max, modVersion, gameVersion, protocol, dlcs, time }
+
+// ---- invite codes (v0.16.0) ----
+// The address friends use to reach this relay: --address=..., BBCOOP_ADDRESS, or set from the
+// host's game (Ctrl+I). Without one, the relay suggests its Tailscale and home network addresses.
+const addrArg = args.find((a) => a.startsWith('--address='));
+let publicAddress = normalizeAddress(addrArg ? addrArg.slice(10) : process.env.BBCOOP_ADDRESS || '');
+
+function normalizeAddress(a) {
+  a = String(a || '').trim().replace(/\/+$/, '');
+  if (!a) return '';
+  if (a.indexOf('://') === -1) {
+    a = 'http://' + a;
+    if (!/:\d+$/.test(a)) a += ':' + PORT;
+  }
+  return a;
+}
+
+function detectedAddresses() {
+  const out = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const i of list || []) {
+      if (i.family !== 'IPv4' && i.family !== 4) continue;
+      if (i.internal) continue;
+      const [a, b] = i.address.split('.').map(Number);
+      if (a === 100 && b >= 64 && b <= 127) out.push({ kind: 'tailscale', url: `http://${i.address}:${PORT}` });
+      else if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31)) out.push({ kind: 'home network', url: `http://${i.address}:${PORT}` });
+    }
+  }
+  return out;
+}
+
+function bestAddress() {
+  if (publicAddress) return publicAddress;
+  const found = detectedAddresses();
+  const ts = found.find((f) => f.kind === 'tailscale');
+  return ts ? ts.url : '';
+}
+
+// "BB1-" + the address and the host's name, so a joiner's list knows whose it is
+function inviteCode(address, host) {
+  if (!address) return '';
+  const raw = encodeURIComponent(address) + '|' + encodeURIComponent(host || '');
+  return 'BB1-' + Buffer.from(raw, 'ascii').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function printInvite() {
+  const code = inviteCode(bestAddress(), hostCard && hostCard.host);
+  if (code) console.log(`Invite code for your friends: ${code}   (address ${bestAddress()})`);
+  else console.log('No invite code yet: no address friends can reach was found. Start the tunnel or Tailscale, or press Ctrl+I in the game and paste your address.');
+}
 
 function isLocal(req) {
   const a = req.socket.remoteAddress || '';
@@ -420,6 +471,23 @@ const server = http.createServer(async (req, res) => {
 
     // The host's game on this PC describes its session (only accepted from this PC).
     // A password typed in the game's Host window replaces the one start-relay.bat asked for.
+    // The host's invite code and the addresses it could be built from (only for the host PC)
+    if (req.method === 'GET' && url.pathname === '/invite') {
+      if (!isLocal(req)) return sendJSON(res, 403, { error: 'only the host PC can see the invite' });
+      const address = bestAddress();
+      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress });
+    }
+
+    // The host pastes the address friends use (e.g. the tunnel URL) in the game
+    if (req.method === 'POST' && url.pathname === '/address') {
+      if (!isLocal(req)) return sendJSON(res, 403, { error: 'only the host PC can set the address' });
+      const body = await readBody(req);
+      publicAddress = normalizeAddress(body.address);
+      printInvite();
+      const address = bestAddress();
+      return sendJSON(res, 200, { address, code: inviteCode(address, hostCard && hostCard.host), detected: detectedAddresses(), set: !!publicAddress });
+    }
+
     if (req.method === 'POST' && url.pathname === '/host') {
       if (!isLocal(req)) return sendJSON(res, 403, { error: 'only the host PC can set the session' });
       const body = await readBody(req);
@@ -435,7 +503,7 @@ const server = http.createServer(async (req, res) => {
         PASSWORD = body.password.trim();
         console.log('Session password set from the host\'s game.');
       }
-      if (first) console.log(`Hosting "${hostCard.name}" for ${hostCard.host}, up to ${maxPlayers()} players.`);
+      if (first) { console.log(`Hosting "${hostCard.name}" for ${hostCard.host}, up to ${maxPlayers()} players.`); printInvite(); }
       return sendJSON(res, 200, { ok: true, max: maxPlayers(), password: !!PASSWORD });
     }
 
@@ -546,6 +614,7 @@ if (BOT) setInterval(botTick, 1000);
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Battle Brothers Co-op relay v${VERSION} listening on port ${PORT}`);
   console.log(`Same PC: http://127.0.0.1:${PORT}   Other PC on your network: http://<this PC's IP>:${PORT}`);
+  printInvite();
   console.log(PASSWORD ? 'Session password is set: players must enter it in the Multiplayer window or Mod Options.' : 'No session password: anyone who can reach this relay can join.');
   if (BOT) console.log(`Bot player enabled (origin: ${BOT_ORIGINS[botOrigin]}, clan: ${BOT_CLAN}). Its company will circle yours once you are on the world map. Pick an origin with --origin=<${Object.keys(BOT_ORIGINS).join('|')}>`);
 });
