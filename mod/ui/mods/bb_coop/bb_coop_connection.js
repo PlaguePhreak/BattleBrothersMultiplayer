@@ -1069,6 +1069,10 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	if (typeof _info.cd === 'number' && typeof _info.ed === 'number') { window.BBCoopPendingJoin.cd = _info.cd; window.BBCoopPendingJoin.ed = _info.ed; }
+	if (typeof _info.im === 'boolean') window.BBCoopPendingJoin.im = _info.im;
+	if (typeof _info.pd === 'boolean') window.BBCoopPendingJoin.pd = _info.pd;
+	if (typeof _info.ex === 'boolean') window.BBCoopPendingJoin.ex = _info.ex;
+	if (typeof _info.ge === 'number') window.BBCoopPendingJoin.ge = _info.ge;
 	this.showToast('Joining ' + _from + "'s campaign" + (_info.day ? ' (day ' + _info.day + ')' : '') + ". Pick your origin; the map, difficulty and day are set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
 };

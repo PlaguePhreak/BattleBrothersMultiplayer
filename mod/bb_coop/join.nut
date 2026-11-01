@@ -26,11 +26,40 @@
 		local info = { to = _from, seed = seed, x = pos.X, y = pos.Y, dlcs = ::BBCoop.getDLCs(), day = ::World.getTime().Days };
 		// the joiner plays our campaign: same combat and economic difficulty
 		try { info.cd <- ::World.Assets.getCombatDifficulty(); info.ed <- ::World.Assets.getEconomicDifficulty(); } catch (error) {}
+		// v0.30.0: and every other campaign setting of ours, forced on the joiner's new campaign
+		try
+		{
+			info.im <- ::World.Assets.isIronman();
+			info.pd <- ::World.Assets.m.IsPermanentDestruction;
+			info.ex <- ::World.Assets.m.IsExplorationMode;
+			info.ge <- ::World.FactionManager.getGreaterEvil().Type;
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not read all campaign settings for " + _from + ": " + error);
+		}
 		::BBCoop.Connection.sendMessage("session_info", info);
 		::BBCoop.notify(_from + " is joining your world.");
 	}
 
 	// ---- joiner ----
+
+	// The new campaign screen's choices, with everything but origin, banner and name replaced
+	// by the host's settings (v0.30.0). Called from world_state.setNewCampaignSettings.
+	function forceHostSettings( _settings )
+	{
+		local info = this.Pending;
+		if (info == null) return;
+		_settings.Seed = info.seed;
+		if (("cd" in info) && info.cd != null) _settings.Difficulty = info.cd;
+		if (("ed" in info) && info.ed != null) _settings.EconomicDifficulty = info.ed;
+		if (("im" in info) && info.im != null) _settings.Ironman = info.im;
+		if (("pd" in info) && info.pd != null) _settings.PermanentDestruction = info.pd;
+		if (("ex" in info) && info.ex != null) _settings.ExplorationMode = info.ex;
+		if (("ge" in info) && info.ge != null) _settings.GreaterEvil = info.ge;
+		::BBCoop.log(format("Joining with %s's campaign settings (difficulty %s/%s, ironman %s, unexplored %s)", info.host, "" + _settings.Difficulty, "" + _settings.EconomicDifficulty, "" + _settings.Ironman, "" + _settings.ExplorationMode));
+	}
+
 	function start( _info )
 	{
 		this.Pending = _info;
@@ -119,6 +148,13 @@
 };
 
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.setNewCampaignSettings = @(__original) function( _settings )
+	{
+		try { ::BBCoop.Join.forceHostSettings(_settings); }
+		catch (error) { ::BBCoop.log("Forcing the host's campaign settings failed: " + error); }
+		return __original(_settings);
+	}
+
 	q.startNewCampaign = @(__original) function()
 	{
 		local seed = null;
