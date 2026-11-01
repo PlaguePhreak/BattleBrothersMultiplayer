@@ -684,6 +684,8 @@
 			this.Logging = false;
 		}
 
+		this.showHostRound(_view);
+
 		if (need.len() != 0)
 			::BBCoop.Connection.sendMessage("battle_mirror_need", { to = this.Host, battleID = this.BattleID, ids = need });
 
@@ -713,6 +715,17 @@
 		m.due <- _now + 1.5; // checked again then: done if he arrived
 		if (m.tries < 30) this.Moves.push(m);
 		this.NextMoveTime = _now + 0.25;
+	}
+
+	// The copy's turn bar runs extra rounds while it catches up; the top bar shows the host's round
+	HostRound = null,
+	function showHostRound( _view )
+	{
+		if (!("round" in _view) || _view.round == null || _view.round <= 0) return;
+		local round = _view.round.tointeger();
+		this.HostRound = round;
+		try { ::Time.setRound(round); } catch (error) {}
+		try { ::Tactical.TopbarRoundInformation.update(); } catch (error) {}
 	}
 
 	// For the log: how far our copy is from the host's battle after a view
@@ -1018,6 +1031,7 @@
 		this.Created.clear();
 		this.SpawnData.clear();
 		this.LastApplied = null;
+		this.HostRound = null;
 		this.View = null;
 		this.StripKey = null;
 		::BBCoop.Connection.setMirrorTurn(null);
@@ -1097,6 +1111,14 @@
 		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
 		if (e == null || active == null || active.getID() != e.getID()) return false;
 		return __original(_skillIndex);
+	}
+
+	q.topbar_round_information_onQueryRoundInformation = @(__original) function()
+	{
+		local ret = __original();
+		if (::BBCoop.Mirror.Active && ::BBCoop.Mirror.HostRound != null && ret != null)
+			ret.roundNumber = ::BBCoop.Mirror.HostRound;
+		return ret;
 	}
 
 	q.onProcessAI = @(__original) function()
