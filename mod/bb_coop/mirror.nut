@@ -978,6 +978,16 @@
 		if (activeID == _target.getID()) return true;
 		if (this.CycleFor != _targetID) { this.CycleFor = _targetID; this.CycleTries = 0; this.LastActiveID = null; this.LastCycle = 0.0; }
 		if (this.CycleTries >= this.Units.len() * 2 + 4) return false; // give up for this turn; the map still works
+		// Someone else's unit that already had his turn in the copy's round: going on would run the
+		// copy into its next round ahead of the host. Wait there until the host's round moves on.
+		if (!this.isOurTurn())
+		{
+			local togo = null;
+			try { togo = ::Tactical.TurnSequenceBar.getTurnsUntilActive(_target.getID()); } catch (error) {}
+			local copyRound = 0;
+			try { copyRound = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+			if (togo == null && (this.HostRound == null || copyRound >= this.HostRound)) return false;
+		}
 		local moved = activeID != this.LastActiveID;
 		if (!moved && _now - this.LastCycle < 2.0) return false; // still animating
 		if (_active != null && ::Tactical.getNavigator().isTravelling(_active)) return false;
@@ -1152,16 +1162,15 @@
 		this.updateMoves(now);
 		this.updateActs(now);
 
-		// The copy's turn bar only moves for our own brothers' turns (so the game's skill bar is his).
-		// Chasing every unit of the host's battle ran the copy ahead of the host and back again,
-		// because the copy's turn order isn't the host's.
 		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
 		local targetID = this.View != null && ("activeID" in this.View) ? this.View.activeID : null;
 		local target = this.getUnit(targetID);
 		local activeNow = active != null ? active.getID() : null;
 		if (activeNow != this.SeenActiveID) { this.SeenActiveID = activeNow; this.ActiveSince = now; }
 		try { this.markTurn(target); } catch (error) {}
-		local matched = this.updateTurnBar(now, active, targetID, this.isOurTurn() ? target : null);
+		// The copy's turn bar follows every turn of the host's battle (Aaron, v0.40.0); for other
+		// players' units it never runs into a round the host hasn't reached (see updateTurnBar)
+		local matched = this.updateTurnBar(now, active, targetID, target);
 		if (matched)
 		{
 			try { active.onUpdate(); } catch (error) {}
