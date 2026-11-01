@@ -1591,9 +1591,9 @@
 		catch (error) { ::BBCoop.log("Applying the battle result failed: " + error); }
 	}
 
-	q.stunPartiesNearPlayer = @(__original) function()
+	q.stunPartiesNearPlayer = @(__original) function( _isMinor = false )
 	{
 		if (::BBCoop.Mirror.Finishing) return;
-		return __original();
+		return __original(_isMinor);
 	}
 });
