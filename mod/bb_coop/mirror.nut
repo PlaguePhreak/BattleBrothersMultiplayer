@@ -717,6 +717,46 @@
 		this.NextMoveTime = _now + 0.25;
 	}
 
+	// Turn marker (Aaron's ask): in a shared battle the brother whose turn it is gets the game's red
+	// arrow over his head, hopping, on every player's screen. Called every frame with the unit acting.
+	MarkRef = null,
+	MarkBaseX = 0,
+	MarkBaseY = 0,
+	function markTurn( _e )
+	{
+		local cur = this.MarkRef != null && !this.MarkRef.isNull() ? this.MarkRef.get() : null;
+		local show = _e != null && _e.isAlive() && _e.isPlacedOnMap()
+			&& (_e.getFaction() == ::Const.Faction.Player || _e.getFaction() == ::Const.Faction.PlayerAnimals);
+		if (cur != null && (!show || cur.getID() != _e.getID())) this.unmarkTurn();
+		else if (cur == null) this.MarkRef = null;
+		if (!show) return;
+		if (this.MarkRef == null)
+		{
+			local base = _e.getSpriteOffset("arrow");
+			this.MarkBaseX = base.X;
+			this.MarkBaseY = base.Y;
+			this.MarkRef = ::WeakTableRef(_e);
+		}
+		local arrow = _e.getSprite("arrow");
+		if (!arrow.Visible) { arrow.Visible = true; arrow.fadeIn(100); }
+		local phase = (::Time.getRealTimeF() * 1.6) % 1.0; // about one and a half hops a second
+		local hop = 4.0 * phase * (1.0 - phase) * 12.0;
+		_e.setSpriteOffset("arrow", ::createVec(this.MarkBaseX, this.MarkBaseY + hop));
+	}
+
+	function unmarkTurn()
+	{
+		local cur = this.MarkRef != null && !this.MarkRef.isNull() ? this.MarkRef.get() : null;
+		this.MarkRef = null;
+		if (cur == null) return;
+		try
+		{
+			cur.setSpriteOffset("arrow", ::createVec(this.MarkBaseX, this.MarkBaseY));
+			if (cur.isAlive()) cur.showArrow(false);
+		}
+		catch (error) {}
+	}
+
 	// The copy's turn bar runs extra rounds while it catches up; the top bar shows the host's round
 	HostRound = null,
 	function showHostRound( _view )
@@ -948,6 +988,7 @@
 		local target = this.getUnit(targetID);
 		local activeNow = active != null ? active.getID() : null;
 		if (activeNow != this.SeenActiveID) { this.SeenActiveID = activeNow; this.ActiveSince = now; }
+		try { this.markTurn(target); } catch (error) {}
 		local matched = this.updateTurnBar(now, active, targetID, this.isOurTurn() ? target : null);
 		if (matched)
 		{
@@ -1055,6 +1096,7 @@
 	// tactical_state.onFinish
 	function onTacticalFinish()
 	{
+		this.MarkRef = null;
 		if (!this.Active && this.Scene == null) return;
 		this.Active = false;
 		this.Scene = null;

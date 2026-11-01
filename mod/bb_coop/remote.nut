@@ -434,6 +434,7 @@
 			}
 			try { ::BBCoop.Mirror.hostTick(e); }
 			catch (error) { ::BBCoop.log("Mirror sync failed: " + error); }
+			try { ::BBCoop.Mirror.markTurn(e); } catch (error) {}
 		}
 
 		local remote = false;
