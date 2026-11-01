@@ -273,6 +273,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	// JS polls this about once a second; returns null when not on the world map
 	function getWorldPosition()
 	{
+		try { ::BBCoop.Time.tick(); } catch (error) { ::BBCoop.log("Time sync failed: " + error); }
 		if (!::MSU.Utils.hasState("world_state")) return null;
 		try
 		{
@@ -351,6 +352,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "world_full":
 				::BBCoop.World.onFull(_msg.from, _msg.payload);
+				break;
+			case "world_time":
+				::BBCoop.Time.onTime(_msg.from, _msg.payload);
+				break;
+			case "busy":
+				::BBCoop.Time.onBusy(_msg.from, _msg.payload);
 				break;
 			case "world_parties":
 				::BBCoop.World.onParties(_msg.from, _msg.payload);

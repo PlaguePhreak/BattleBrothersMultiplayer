@@ -229,7 +229,7 @@ function activePlayers() {
 
 // World updates replace the sender's previous one, so the history doesn't fill up with
 // stale copies of the whole world
-const LATEST_ONLY = new Set(['world_full', 'world_parties']);
+const LATEST_ONLY = new Set(['world_full', 'world_parties', 'world_time']);
 
 function pushMessage(from, type, payload) {
   const msg = { seq: ++seq, from, type, payload, time: Date.now() };
@@ -244,7 +244,7 @@ function pushMessage(from, type, payload) {
   if (messages.length > MAX_MESSAGES) messages.shift();
   if (type === 'world_full' && payload) {
     console.log(`[${new Date().toISOString()}] ${from}: world_full (${(payload.parties || []).length} parties, ${(payload.locations || []).length} locations, day ${payload.day})`);
-  } else if (type !== 'pos' && type !== 'world_parties') {
+  } else if (type !== 'pos' && type !== 'world_parties' && type !== 'world_time' && type !== 'busy') {
     let text = JSON.stringify(payload);
     if (text.length > 300) text = text.slice(0, 300) + `... (${text.length} chars)`;
     console.log(`[${new Date().toISOString()}] ${from}: ${type} ${text}`);

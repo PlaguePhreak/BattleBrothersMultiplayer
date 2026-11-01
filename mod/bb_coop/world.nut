@@ -445,8 +445,6 @@
 		{
 			this.Announced = true;
 			local text = format("Your world now follows %s's: %i parties, %i camps and lairs.", _from, _payload.parties.len(), _payload.locations.filter(@(i, l) !l.at).len());
-			local myDay = ::World.getTime().Days;
-			if (_payload.day != myDay) text += format(" Their world is on day %i, yours on day %i (days can't be synced).", _payload.day, myDay);
 			::BBCoop.notify(text);
 		}
 		if (!this.canTouchWorld()) return;
