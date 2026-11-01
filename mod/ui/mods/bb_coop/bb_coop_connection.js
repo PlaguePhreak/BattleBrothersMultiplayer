@@ -329,7 +329,8 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 	}
 	if (_msg.type === 'battle_view')
 	{
-		if (forMe) this.showBattleView(_msg.from, p);
+		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
+		if (forMe && p.battleID !== this.mBattleClosedID) this.showBattleView(_msg.from, p);
 		return true;
 	}
 	if (_msg.type === 'battle_order_error')
@@ -371,7 +372,7 @@ BBCoopConnection.prototype.createBattlePanel = function ()
 	}).appendTo(panel);
 	this.mBattleReopen = $('<div class="text-font-normal">Co-op battle</div>').css({
 		position: 'fixed', left: '2rem', top: '9rem', 'z-index': 99000, display: 'none', cursor: 'pointer',
-		background: 'rgba(0,0,0,0.85)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', 'font-size': '1.6rem'
+		background: 'rgba(0,0,0,0.85)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', 'font-size': '1.6rem', color: '#e8dcc0'
 	}).appendTo($('body')).click(function () { self.setBattleHidden(false); });
 	this.mBattlePanel = panel;
 	this.mBattleHidden = false;
@@ -386,6 +387,7 @@ BBCoopConnection.prototype.setBattleHidden = function (_hidden)
 
 BBCoopConnection.prototype.closeBattlePanel = function ()
 {
+	if (this.mBattle && this.mBattle.view) this.mBattleClosedID = this.mBattle.view.battleID;
 	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
 	this.mBattlePanel = null;
 	this.mBattle = null;

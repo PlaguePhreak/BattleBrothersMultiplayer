@@ -346,6 +346,17 @@
 		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
 	}
 
+	function onLeaveWorld()
+	{
+		this.PendingRefs = null;
+		this.PendingHost = null;
+		this.PendingBattleID = null;
+		this.LocalEnemies = null;
+		this.Invite = null;
+		this.CombatArgs = null;
+		::BBCoop.Connection.closeBattlePanel();
+	}
+
 	function onJoinRefused( _from, _payload )
 	{
 		if (this.PendingRefs != null && _from == this.PendingHost && _payload.battleID == this.PendingBattleID)
@@ -563,6 +574,15 @@
 		}
 		if (intercepted) return;
 		return __original(_isPlayerInitiated, _isCombatantsVisible, _allowFormationPicking, _properties, _pos);
+	}
+});
+
+// Leaving the campaign (main menu, loading a save) ends any battle we were following
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.onFinish = @(__original) function()
+	{
+		try { ::BBCoop.Battle.onLeaveWorld(); } catch (error) { ::BBCoop.log("onLeaveWorld failed: " + error); }
+		__original();
 	}
 });
 
