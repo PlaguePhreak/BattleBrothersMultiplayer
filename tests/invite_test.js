@@ -47,6 +47,13 @@ setTimeout(async () => {
   check(parsed && parsed.url === 'https://brave-wolves.trycloudflare.com' && parsed.host === 'Ärön', 'code decodes to address and host name (non-ASCII too)');
   check(me.parseInvite('100.101.2.3').url === 'http://100.101.2.3:7777', 'plain address gets http:// and :7777');
   check(me.parseInvite('BB1-%%%') === null && me.parseInvite('hello there') === null, 'junk is rejected');
+  // v0.17.1: one Ctrl+V could paste the text many times in game
+  check(me.parseInvite(inv.code + inv.code + inv.code).url === parsed.url, 'a code pasted 3 times still works');
+  check(me.parseInvite(inv.code + ' ' + inv.code).url === parsed.url, 'a code pasted twice with a space still works');
+  check(me.parseInvite('https://brave-wolves.trycloudflare.comhttps://brave-wolves.trycloudflare.com').url === 'https://brave-wolves.trycloudflare.com', 'an address pasted twice still works');
+  check(me.collapsePaste('', inv.code + inv.code + inv.code + inv.code) === inv.code, 'a repeated paste is cut back to one copy');
+  check(me.collapsePaste('ab', 'abxyzxyz') === 'abxyz', 'only the pasted part is cut back');
+  check(me.collapsePaste('ab', 'abx') === 'abx', 'typing is left alone');
 
   me.rememberHost(parsed.url, parsed.host);
   me.rememberHost('http://127.0.0.1:' + PORT, '');
