@@ -435,9 +435,9 @@
 		try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
 
 		// a dead unit got the turn (he stayed in the turn bar): skip him instead of waiting forever
-		if (e != null && !e.isAlive() && ::BBCoop.Battle.HostBattleID != null && !(this.m.IsGameFinishable && this.isBattleEnded()))
+		if (e != null && (!e.isAlive() || !e.isPlacedOnMap()) && ::BBCoop.Battle.HostBattleID != null && !(this.m.IsGameFinishable && this.isBattleEnded()))
 		{
-			::BBCoop.log(e.getName() + " is dead but had the turn: skipping him");
+			::BBCoop.log(e.getName() + " is dead or gone but had the turn: skipping him");
 			try { ::Tactical.TurnSequenceBar.removeEntity(e); } catch (error) {}
 			try { if (::Tactical.TurnSequenceBar.getActiveEntity() == e) ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) {}
 			return;

@@ -1422,6 +1422,19 @@
 	}
 });
 
+// Host: a brother who retreats leaves the turn bar too (as with deaths, vanilla didn't always)
+::BBCoop.MH.hook("scripts/entity/tactical/player", function(q) {
+	q.retreat = @(__original) function()
+	{
+		local ret = __original();
+		if (!::BBCoop.Mirror.Active && ::BBCoop.Battle.HostBattleID != null)
+		{
+			try { ::Tactical.TurnSequenceBar.removeEntity(this); } catch (error) {}
+		}
+		return ret;
+	}
+});
+
 ::BBCoop.MH.hook("scripts/entity/tactical/tactical_entity_manager", function(q) {
 	// the copy never ends on its own: the host's battle decides
 	q.checkCombatFinished = @(__original) function( _forceFinish = false )
@@ -1446,15 +1459,9 @@
 		// UI can't find him and the battle freezes (seen when a friend's brother died)
 		if (!::BBCoop.Mirror.Active && ::BBCoop.Battle.HostBattleID != null && !this.isAlive())
 		{
-			try
-			{
-				if (::Tactical.TurnSequenceBar.getTurnsUntilActive(this.getID()) != null)
-				{
-					::Tactical.TurnSequenceBar.removeEntity(this);
-					::BBCoop.log("Took " + this.getName() + " off the turn bar");
-				}
-			}
-			catch (error) {}
+			// (vanilla removes him only while he counts as placed on the map, which a visiting
+			// brother didn't always; removing one who isn't in the bar does nothing)
+			try { ::Tactical.TurnSequenceBar.removeEntity(this); } catch (error) {}
 		}
 		return ret;
 	}
@@ -1470,7 +1477,22 @@
 		}
 		local args = [this];
 		args.extend(vargv);
-		return __original.acall(args);
+		local ret = __original.acall(args);
+		// host of a shared battle: never hand the turn to a dead unit (his turn bar entry can't be
+		// shown and the battle froze); move on to the next one
+		if (::BBCoop.Battle.HostBattleID != null && !::BBCoop.Mirror.Active)
+		{
+			for (local i = 0; i < 8; i++)
+			{
+				local e = null;
+				try { e = this.getActiveEntity(); } catch (error) {}
+				if (e == null || (e.isAlive() && e.isPlacedOnMap())) break;
+				::BBCoop.log(e.getName() + " is dead or gone but was next in the turn bar: skipping him");
+				try { this.removeEntity(e); } catch (error) {}
+				try { if (this.getActiveEntity() == e) __original.acall(args); } catch (error) { break; }
+			}
+		}
+		return ret;
 	}
 
 	// "End round" (button or Enter) skips every brother the game counts as player-controlled. On the
