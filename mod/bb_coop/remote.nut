@@ -408,7 +408,29 @@
 	function useSkill( _state, _e, _owner, _skillID, _x, _y )
 	{
 		local skill = _e.getSkills().getSkillByID(_skillID);
-		if (skill == null) { this.sendError(_owner, "Unknown skill."); return; }
+		if (skill == null)
+		{
+			// Reload of a crossbow or handgonne: vanilla only has that skill while the weapon is empty,
+			// and the guest's copy may be ahead of (or behind) this container. Rebuild it from the
+			// weapon's state and look again (v0.43.4); a skill still unknown is logged with what he has.
+			try
+			{
+				local w = _e.getItems().getItemAtSlot(::Const.ItemSlot.Mainhand);
+				if (w != null && ("IsLoaded" in w.m) && (_skillID == "actives.reload_bolt" || _skillID == "actives.reload_handgonne"))
+					::BBCoop.Mirror.syncReloadSkill(_e, w, false);
+				try { _e.getSkills().update(); } catch (e2) {}
+				skill = _e.getSkills().getSkillByID(_skillID);
+			}
+			catch (error) {}
+		}
+		if (skill == null)
+		{
+			local have = "";
+			try { foreach (sk in _e.getSkills().getAllSkillsOfType(::Const.SkillType.Active)) have += (have == "" ? "" : ", ") + sk.getID(); } catch (error) {}
+			::BBCoop.log(format("%s (%s) asked for the unknown skill %s; he has: %s", _e.getName(), _owner, "" + _skillID, have));
+			this.sendError(_owner, "Unknown skill.");
+			return;
+		}
 		if (!skill.isUsable() || !skill.isAffordable()) { this.sendError(_owner, skill.getName() + " can't be used right now."); return; }
 		local tile = skill.isTargeted() && ::Tactical.isValidTileSquare(_x, _y) ? ::Tactical.getTileSquare(_x, _y) : _e.getTile();
 		if (!skill.isUsableOn(tile)) { this.sendError(_owner, "Invalid target for " + skill.getName() + "."); return; }
