@@ -1134,13 +1134,77 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 				this.mSeed.setInputText(pending.seed);
 				this.mSeed.attr('readonly', 'readonly');
 			}
+			if (pending)
+			{
+				try { this.bbcoopLockSettings(pending); }
+				catch (e) { console.error('BBCoop: could not lock the campaign settings: ' + e); }
+			}
 		};
 		var hide = NewCampaignMenuModule.prototype.hide;
 		NewCampaignMenuModule.prototype.hide = function ()
 		{
 			window.BBCoopPendingJoin = null;
 			if (this.mSeed) this.mSeed.removeAttr('readonly');
+			try { this.bbcoopUnlockSettings(); } catch (e) {}
 			return hide.apply(this, arguments);
+		};
+
+		// v0.30.0: a joiner picks only origin, company name and banner. Everything else shows the
+		// host's campaign settings, greyed out (the game forces them too, whatever is sent).
+		NewCampaignMenuModule.prototype.bbcoopLockable = function ()
+		{
+			return [this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox,
+				this.mEvilCrusadeCheckbox, this.mEvilPermanentDestructionCheckbox,
+				this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox,
+				this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox,
+				this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox,
+				this.mIronmanCheckbox, this.mExplorationCheckbox];
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopLockSettings = function (_pending)
+		{
+			var check = function (_box, _on) { if (_box) _box.iCheck(_on ? 'check' : 'uncheck'); };
+			var pick = function (_list, _index) { if (typeof _index === 'number' && _list[_index]) _list[_index].iCheck('check'); };
+			pick([this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox], _pending.cd);
+			pick([this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox], _pending.ed);
+			// starting funds aren't kept in a save, so joiners all start on Medium
+			pick([this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox], 1);
+			pick([this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox, this.mEvilCrusadeCheckbox], _pending.ge);
+			if (typeof _pending.im === 'boolean') check(this.mIronmanCheckbox, _pending.im);
+			if (typeof _pending.ex === 'boolean') check(this.mExplorationCheckbox, _pending.ex);
+			if (typeof _pending.pd === 'boolean') check(this.mEvilPermanentDestructionCheckbox, _pending.pd);
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('disable');
+			var text = 'Campaign settings come from ' + _pending.host + "'s world and can't be changed.";
+			if (!this.mBBCoopNote)
+			{
+				this.mBBCoopNote = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mDifficultySelectionPanel.prepend(this.mBBCoopNote);
+				this.mBBCoopNote2 = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mCompanyCrisisSelectionPanel.prepend(this.mBBCoopNote2);
+			}
+			this.mBBCoopNote.text(text).show();
+			this.mBBCoopNote2.text('Pick your company name and banner. ' + text).show();
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopUnlockSettings = function ()
+		{
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('enable');
+			if (this.mBBCoopNote) { this.mBBCoopNote.hide(); this.mBBCoopNote2.hide(); }
+		};
+
+		// leaving the screen without starting: the join is off
+		var cancel = NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed;
+		NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed = function ()
+		{
+			try
+			{
+				var screen = window.BBCoopScreen;
+				if (window.BBCoopPendingJoin && screen && screen.mSQHandle) SQ.call(screen.mSQHandle, 'cancelJoin', null);
+			}
+			catch (e) {}
+			return cancel.apply(this, arguments);
 		};
 	}
 })();

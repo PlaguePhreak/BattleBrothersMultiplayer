@@ -57,6 +57,7 @@
 		if (("pd" in info) && info.pd != null) _settings.PermanentDestruction = info.pd;
 		if (("ex" in info) && info.ex != null) _settings.ExplorationMode = info.ex;
 		if (("ge" in info) && info.ge != null) _settings.GreaterEvil = info.ge;
+		_settings.BudgetDifficulty = 1; // starting funds aren't kept in a save: every joiner gets Medium
 		::BBCoop.log(format("Joining with %s's campaign settings (difficulty %s/%s, ironman %s, unexplored %s)", info.host, "" + _settings.Difficulty, "" + _settings.EconomicDifficulty, "" + _settings.Ironman, "" + _settings.ExplorationMode));
 	}
 

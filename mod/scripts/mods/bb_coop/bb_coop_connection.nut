@@ -179,6 +179,13 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	// The joiner left the new campaign screen without starting
+	function cancelJoin( _data )
+	{
+		if (::BBCoop.Join.Pending != null) ::BBCoop.log("Join cancelled on the new campaign screen.");
+		::BBCoop.Join.Pending = null;
+	}
+
 	// The real battlefield (mirror.nut) is up: the battle panel only shows when it can't be used
 	function setBattleMirror( _on, _fallback )
 	{
