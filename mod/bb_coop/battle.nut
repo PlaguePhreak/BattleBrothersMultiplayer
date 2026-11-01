@@ -13,6 +13,7 @@
 	HostBattleID = null,    // set while we host a battle
 	Reinforcements = [],    // { key, owner, name, bro = WeakTableRef }
 	JoinedOwners = {},      // owner name -> true
+	MirrorOwners = {},      // owner name -> { sent = { entity id -> true } }: they see the real battlefield
 	PlayerOrigins = {},     // player name -> origin id, sent by the relay's test bot
 
 	// ---- ally side ----
@@ -38,6 +39,7 @@
 		this.HostBattleID = ::BBCoop.getSetting("PlayerName") + "_" + ::Time.getRealTime();
 		this.Reinforcements.clear();
 		this.JoinedOwners.clear();
+		this.MirrorOwners.clear();
 		::BBCoop.Remote.reset();
 		::BBCoop.Loot.onBattleStarted();
 
@@ -84,6 +86,12 @@
 
 		local side = ("side" in _payload) && _payload.side == "enemy" ? "enemy" : "ally";
 		local spawned = this.spawnReinforcements(_from, _payload.bros, side);
+		// v0.18.0 joiners build a copy of our battlefield and watch it there
+		if (("mirror" in _payload) && _payload.mirror)
+		{
+			this.MirrorOwners[_from] <- { sent = {} };
+			if (!::BBCoop.Mirror.sendScene(_from)) delete this.MirrorOwners[_from];
+		}
 		if (side == "enemy")
 			::BBCoop.notify(format("%s's company joins the battle AGAINST you (%i brothers)!", _from, spawned));
 		else
@@ -243,6 +251,7 @@
 		}
 		this.Reinforcements.clear();
 		this.JoinedOwners.clear();
+		this.MirrorOwners.clear();
 	}
 
 	// ================= ally =================
@@ -343,6 +352,7 @@
 		this.PendingBattleID = null;
 		this.LocalEnemies = null;
 		::BBCoop.Connection.closeBattlePanel();
+		::BBCoop.Mirror.leave();
 		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
 	}
 
@@ -354,6 +364,7 @@
 		this.LocalEnemies = null;
 		this.Invite = null;
 		this.CombatArgs = null;
+		::BBCoop.Mirror.Result = null;
 		::BBCoop.Connection.closeBattlePanel();
 	}
 
@@ -432,7 +443,7 @@
 		this.PendingSide = _side;
 		this.PendingBattleID = this.Invite.battleID;
 		::BBCoop.Seen[this.PendingHost] <- ::Time.getRealTimeF();
-		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros, side = _side });
+		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros, side = _side, mirror = ::BBCoop.Mirror.isEnabled() });
 		this.Invite = null;
 		try { ::World.State.setPause(true); } catch (error) {}
 		if (_side == "enemy")
@@ -469,6 +480,9 @@
 	function onBattleResult( _from, _payload )
 	{
 		if (this.PendingRefs == null) return;
+		if (_from != this.PendingHost) return;
+		// watching the copy of the battle: apply the result once we are back on the world map
+		if (::BBCoop.Mirror.keepResult(_from, _payload)) return;
 		local died = [], survived = 0;
 		foreach (entry in _payload.bros)
 		{
@@ -534,7 +548,24 @@
 ::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
 	q.initMap = @(__original) function()
 	{
+		// a copy of another player's battle (mirror.nut): same seed, then their units
+		local mirror = false;
+		try { mirror = ::BBCoop.Mirror.beforeInitMap(this); }
+		catch (error) { ::BBCoop.log("Mirror setup failed: " + error); }
+		if (!mirror)
+		{
+			try { ::BBCoop.Mirror.seedHostMap(this); }
+			catch (error) { ::BBCoop.log("Seeding the map failed: " + error); }
+		}
 		__original();
+		if (mirror)
+		{
+			try { ::BBCoop.Mirror.afterInitMap(this); }
+			catch (error) { ::BBCoop.log("Building the copy of the battle failed: " + error); }
+			return;
+		}
+		try { ::BBCoop.Mirror.afterHostMap(); }
+		catch (error) { ::BBCoop.log("Map fingerprint failed: " + error); }
 		try
 		{
 			::BBCoop.Battle.onBattleStarted();
@@ -555,6 +586,8 @@
 		{
 			::BBCoop.log("onBattleEnded failed: " + error);
 		}
+		try { ::BBCoop.Mirror.onTacticalFinish(); }
+		catch (error) { ::BBCoop.log("Closing the copy of the battle failed: " + error); }
 		__original();
 	}
 });

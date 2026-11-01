@@ -329,13 +329,33 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 	}
 	if (_msg.type === 'battle_view')
 	{
+		if (!forMe) return true;
+		// the game keeps the views too: it may be showing the real battlefield (v0.18.0)
+		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
 		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
-		if (forMe && p.battleID !== this.mBattleClosedID) this.showBattleView(_msg.from, p);
+		if (p.battleID === this.mBattleClosedID) return true;
+		if (this.mMirror && !this.mMirrorFallback) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
+		if (this.mMirror && p.turn === null)
+		{
+			// fallback: the panel is only for our turns, the battlefield shows the rest
+			this.mBattle = { host: _msg.from, view: p, skill: null };
+			if (this.mBattlePanel) this.setBattleHidden(true);
+			return true;
+		}
+		this.showBattleView(_msg.from, p);
 		return true;
+	}
+	if (_msg.type === 'battle_scene')
+	{
+		// the game is about to build the real battlefield: no panel meanwhile
+		if (forMe) { this.mMirror = true; this.mMirrorFallback = false; this.removeBattlePanel(); }
+		return false;
 	}
 	if (_msg.type === 'battle_order_error')
 	{
-		if (forMe) { this.mBattleBusy = false; this.setBattleStatus(p.text, true); this.renderBattleSidebar(); }
+		if (!forMe) return true;
+		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
+		if (this.mBattlePanel) { this.mBattleBusy = false; this.setBattleStatus(p.text, true); this.renderBattleSidebar(); }
 		return true;
 	}
 	if (_msg.type === 'session_info')
@@ -385,6 +405,23 @@ BBCoopConnection.prototype.setBattleHidden = function (_hidden)
 	this.mBattleReopen.css('display', _hidden ? 'block' : 'none');
 };
 
+// Squirrel: the real battlefield is up (on), or can't take our turns (fallback: panel on our turns)
+BBCoopConnection.prototype.setBattleMirror = function (_data)
+{
+	this.mMirror = _data.on === true;
+	this.mMirrorFallback = _data.fallback === true;
+	if (this.mMirror && !this.mMirrorFallback) { this.removeBattlePanel(); return; }
+	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && (!this.mMirror || this.mBattle.view.turn !== null))
+		this.showBattleView(this.mBattle.host, this.mBattle.view);
+};
+
+// Takes the panel off the screen but remembers the battle
+BBCoopConnection.prototype.removeBattlePanel = function ()
+{
+	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
+	this.mBattlePanel = null;
+};
+
 BBCoopConnection.prototype.closeBattlePanel = function ()
 {
 	if (this.mBattle && this.mBattle.view) this.mBattleClosedID = this.mBattle.view.battleID;
@@ -417,7 +454,8 @@ BBCoopConnection.prototype.renderBattleMap = function ()
 	var d = Math.max(4, Math.floor(s * 1.7));
 
 	var unitAt = {};
-	for (var i = 0; i < view.units.length; i++) unitAt[view.units[i].x + ',' + view.units[i].y] = view.units[i];
+	for (var i = 0; i < view.units.length; i++)
+		if (!view.units[i].hid) unitAt[view.units[i].x + ',' + view.units[i].y] = view.units[i];
 	var targets = {};
 	if (this.mBattle.skill !== null)
 		for (var t = 0; t < this.mBattle.skill.targets.length; t++) targets[this.mBattle.skill.targets[t][0] + ',' + this.mBattle.skill.targets[t][1]] = true;

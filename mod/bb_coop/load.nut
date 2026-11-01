@@ -12,6 +12,7 @@ page.addStringSetting("LastServerURL", "", "Last server", "Address of the last w
 page.addStringSetting("LastServerHost", "", "Last server's host", "Who hosted the last world you joined.");
 page.addStringSetting("SavedHosts", "", "Saved hosts", "Hosts in your join list (added by invite code or by joining). Filled in automatically.");
 page.addStringSetting("CoopSaves", "", "Co-op saves", "Save files used in multiplayer, marked Co-op in the Load screen. Filled in automatically.");
+page.addBooleanSetting("RealBattleView", true, "Real battlefield in shared battles", "When you join another player's battle, watch and play it on a copy of their real battlefield. Off: the simple battle panel.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 
 ::BBCoop.getSetting <- function( _id )
@@ -158,6 +159,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/roster.nut");
 ::include("bb_coop/battle.nut");
 ::include("bb_coop/remote.nut");
+::include("bb_coop/mirror.nut");
 ::include("bb_coop/join.nut");
 ::include("bb_coop/loot.nut");
 ::include("bb_coop/world.nut");

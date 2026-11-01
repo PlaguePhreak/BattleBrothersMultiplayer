@@ -82,6 +82,7 @@
 		local size = ::Tactical.getMapSize();
 		local terrain = "", levels = "";
 		local units = [];
+		local mirror = _owner in ::BBCoop.Battle.MirrorOwners;
 		// sides are seen from the owner's point of view: they may have joined against us
 		local ownerFaction = ::Const.Faction.Player;
 		foreach (r in ::BBCoop.Battle.Reinforcements)
@@ -113,7 +114,10 @@
 				local side = "enemy";
 				if (this.getOwner(u) == _owner) side = "mine";
 				else if (u.getFaction() == ownerFaction || ::World.FactionManager.isAllied(ownerFaction, u.getFaction())) side = "ally";
-				if (!t.IsVisibleForPlayer && side == "enemy" && ownerFaction == ::Const.Faction.Player) continue;
+				// enemies we can't see: the battle panel leaves them out, the real battlefield
+				// keeps them (its own fog of war hides them)
+				local hidden = !t.IsVisibleForPlayer && side == "enemy" && ownerFaction == ::Const.Faction.Player;
+				if (hidden && !mirror) continue;
 				local unit = {
 					x = x, y = y,
 					name = u.getName(),
@@ -122,7 +126,9 @@
 					side = side,
 					active = _active != null && u.getID() == _active.getID()
 				};
+				if (hidden) unit.hid <- true;
 				if (side == "mine" && u.getFlags().has("BBCoopKey")) unit.key <- u.getFlags().get("BBCoopKey");
+				if (mirror) ::BBCoop.Mirror.addMirrorFields(unit, u, _owner);
 				units.push(unit);
 			}
 		}
@@ -136,6 +142,12 @@
 			turn = null
 		};
 		try { view.round = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+		if (mirror)
+		{
+			view.activeID <- _active != null ? _active.getID() : null;
+			view.log <- ::BBCoop.Mirror.takeLogFor(_owner);
+			view.dead <- clone ::BBCoop.Mirror.DeadIDs;
+		}
 		if (_active != null && this.getOwner(_active) == _owner && this.controls(_active))
 			view.turn = this.buildTurn(_active);
 		else if (_active != null)
@@ -399,6 +411,14 @@
 ::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
 	q.updateCurrentEntity = @(__original) function()
 	{
+		// a copy of another player's battle: nothing acts here, the host's views drive it (mirror.nut)
+		if (::BBCoop.Mirror.Active)
+		{
+			try { ::BBCoop.Mirror.update(this); }
+			catch (error) { ::BBCoop.log("Mirror update failed: " + error); }
+			return;
+		}
+
 		local e = null;
 		try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
 
