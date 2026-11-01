@@ -1164,6 +1164,34 @@
 		return __original.acall(args);
 	}
 
+	// "End round" (button or Enter) skips every brother the game counts as player-controlled. On the
+	// host that includes the brothers other players control, so their turns were skipped too: give
+	// those back. In a copy of someone else's battle it just ends our brother's turn.
+	q.onEndTurnAllButtonPressed = @(__original) function( ... )
+	{
+		if (::BBCoop.Mirror.Active)
+		{
+			try { ::BBCoop.Mirror.onEndTurn(); } catch (error) {}
+			return;
+		}
+		local args = [this];
+		args.extend(vargv);
+		local ret = __original.acall(args);
+		try
+		{
+			if (::BBCoop.Battle.HostBattleID != null)
+			{
+				foreach (e in ::Tactical.Entities.getInstancesOfFaction(::Const.Faction.Player))
+				{
+					if (e != null && e.isAlive() && ::BBCoop.Remote.getOwner(e) != null && e.getID() != ::BBCoop.Remote.TookOverID)
+						e.setSkipTurn(false);
+				}
+			}
+		}
+		catch (error) { ::BBCoop.log("End round: " + error); }
+		return ret;
+	}
+
 	q.entityWaitTurn = @(__original) function( _entity )
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
