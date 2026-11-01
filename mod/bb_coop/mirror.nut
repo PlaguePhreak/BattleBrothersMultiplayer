@@ -477,6 +477,7 @@
 		this.Active = true;
 		this.StartTime = ::Time.getRealTimeF();
 		this.Units.clear();
+		this.Removed.clear();
 		this.Created.clear();
 		this.Moves.clear();
 		this.CycleFor = null;
@@ -610,9 +611,54 @@
 			this.Moves.push({ id = _u.id, x = _u.x, y = _u.y, tries = 0 });
 	}
 
+	// Removed copies the turn bar may still hold: a dead unit left in the bar later gets a turn,
+	// the bar's UI can't find him and the copy locks up (and once crashed on a selected skill)
+	Removed = [],
+	LastBarClean = 0.0,
+	function cleanTurnBar()
+	{
+		local bar = ::Tactical.TurnSequenceBar;
+		local keep = [];
+		foreach (ref in this.Removed)
+		{
+			if (ref == null || ref.isNull()) continue;
+			local e = ref.get();
+			local inBar = false;
+			try { inBar = bar.getTurnsUntilActive(e.getID()) != null; } catch (error) {}
+			local active = bar.getActiveEntity();
+			local isActive = active != null && active.getID() == e.getID();
+			if (!inBar && !isActive) continue;
+			this.Advancing = true;
+			try
+			{
+				bar.removeEntity(e);
+				::BBCoop.log("Took " + e.getName() + " off the copy's turn bar");
+			}
+			catch (error) { ::BBCoop.log("Turn bar cleanup: " + error); keep.push(ref); }
+			this.Advancing = false;
+		}
+		this.Removed = keep;
+		this.cancelIfNoActive();
+	}
+
+	// The game's cursor code needs a living active unit while a skill is selected
+	function cancelIfNoActive()
+	{
+		local state = this.getState();
+		if (state == null) return;
+		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
+		if (active != null && active.isAlive()) return;
+		if (state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected || state.m.CurrentActionState == ::Const.Tactical.ActionState.ComputePath)
+		{
+			state.m.CurrentActionState = null;
+			state.m.SelectedSkillID = null;
+		}
+	}
+
 	// Gone from the host's battle: dead (corpse) or retreated (just gone)
 	function removeUnit( _e, _dead )
 	{
+		this.Removed.push(::WeakTableRef(_e));
 		this.Killing = true;
 		try
 		{
@@ -970,6 +1016,11 @@
 			try { if (::LoadingScreen.isVisible() && !::LoadingScreen.isAnimating()) ::LoadingScreen.hide(); } catch (error) {}
 		}
 
+		if (now - this.LastBarClean > 0.5)
+		{
+			this.LastBarClean = now;
+			try { this.cleanTurnBar(); } catch (error) {}
+		}
 		if (this.NewView)
 		{
 			this.NewView = false;
@@ -1101,6 +1152,7 @@
 		this.Active = false;
 		this.Scene = null;
 		this.Units.clear();
+		this.Removed.clear();
 		this.Moves.clear();
 		foreach (ref in this.Created)
 		{
@@ -1198,6 +1250,14 @@
 		if (::BBCoop.Mirror.Active && ::BBCoop.Mirror.HostRound != null && ret != null)
 			ret.roundNumber = ::BBCoop.Mirror.HostRound;
 		return ret;
+	}
+
+	q.updateCursorAndTooltip = @(__original) function( _skillSelected = false )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_skillSelected);
+		try { ::BBCoop.Mirror.cancelIfNoActive(); } catch (error) {}
+		try { return __original(_skillSelected); }
+		catch (error) { try { ::BBCoop.Mirror.cancelAction(this); } catch (e2) {} }
 	}
 
 	q.onProcessAI = @(__original) function()
