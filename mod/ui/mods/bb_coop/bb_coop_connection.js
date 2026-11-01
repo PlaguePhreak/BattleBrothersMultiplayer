@@ -280,7 +280,7 @@ BBCoopConnection.prototype.sendPosition = function (_session)
 			return;
 		}
 		// send when the company moved, and at least every 5s so the other side knows we're still here
-		var moved = self.mLastPos === null || Math.abs(self.mLastPos.x - _pos.x) >= 1 || Math.abs(self.mLastPos.y - _pos.y) >= 1;
+		var moved = self.mLastPos === null || Math.abs(self.mLastPos.x - _pos.x) >= 1 || Math.abs(self.mLastPos.y - _pos.y) >= 1 || self.mLastPos.escort !== _pos.escort;
 		if (!moved && now - self.mLastPosSent < 5000) return;
 		self.mLastPos = _pos;
 		self.mLastPosSent = now;

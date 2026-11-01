@@ -89,7 +89,11 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   await sleep(11000);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   const pay = poll.messages.find((m) => m.type === 'contract_pay' && m.payload.to === 'B');
-  check(pay && pay.payload.crowns === 150 && poll.messages.some((m) => m.type === 'contract_done' && m.payload.to === 'B'), 'bot pays the helper and ends its contract');
+  check(pay && pay.payload.crowns === 150, 'bot pays the helper');
+  // then it escorts a caravan for 15s (tests/escort_test.js) and ends the contract
+  await sleep(17000);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'contract_done' && m.payload.to === 'B'), 'bot ends its contract after the escort');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });
