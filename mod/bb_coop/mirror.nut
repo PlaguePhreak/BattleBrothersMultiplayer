@@ -940,11 +940,13 @@
 		local nav = ::Tactical.getNavigator();
 		this.updateMoves(now);
 
-		// keep the turn bar on whoever has the turn in the host's battle
+		// The copy's turn bar only moves for our own brothers' turns (so the game's skill bar is his).
+		// Chasing every unit of the host's battle ran the copy ahead of the host and back again,
+		// because the copy's turn order isn't the host's.
 		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
 		local targetID = this.View != null && ("activeID" in this.View) ? this.View.activeID : null;
 		local target = this.getUnit(targetID);
-		local matched = this.updateTurnBar(now, active, targetID, target);
+		local matched = this.updateTurnBar(now, active, targetID, this.isOurTurn() ? target : null);
 		if (matched)
 		{
 			try { active.onUpdate(); } catch (error) {}
