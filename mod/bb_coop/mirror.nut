@@ -875,9 +875,9 @@
 		if (!show) return;
 		if (this.MarkRef == null)
 		{
-			local base = _e.getSpriteOffset("arrow");
-			this.MarkBaseX = base.X;
-			this.MarkBaseY = base.Y;
+			local offset = _e.getSpriteOffset("arrow");
+			this.MarkBaseX = offset.X;
+			this.MarkBaseY = offset.Y;
 			this.MarkRef = ::WeakTableRef(_e);
 		}
 		local arrow = _e.getSprite("arrow");

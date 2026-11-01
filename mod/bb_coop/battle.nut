@@ -725,7 +725,9 @@
 ::BBCoop.MH.hook("scripts/ui/screens/tactical/modules/turn_sequence_bar/turn_sequence_bar", function(q) {
 	q.initNextRound = @(__original) function( ... )
 	{
-		if (::BBCoop.Battle.isGathering() && !::BBCoop.Mirror.Active)
+		local copy = false;
+		try { copy = ::BBCoop.Mirror.Active; } catch (error) {}
+		if (::BBCoop.Battle.isGathering() && !copy)
 		{
 			::BBCoop.Battle.FirstRoundHeld = true;
 			return;
