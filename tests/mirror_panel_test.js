@@ -62,5 +62,11 @@ screen.handleBattleMessage({ from: 'Aaron', type: 'battle_view', payload: view(n
 check(!screen.mBattlePanel, 'after the result the panel stays closed');
 check(!screen.mMirrorStrip, 'after the result the action strip is gone');
 
+// turn notice in the top right
+screen.setTurnNotice("It's your turn");
+check(!!screen.mTurnNotice, 'turn notice shows');
+screen.setTurnNotice(null);
+check(!screen.mTurnNotice, 'turn notice goes away');
+
 console.log(failed ? 'FAILED: ' + failed : 'PASS');
 process.exit(failed ? 1 : 0);

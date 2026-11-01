@@ -447,6 +447,17 @@
 			try { ::BBCoop.Mirror.hostTick(e); }
 			catch (error) { ::BBCoop.log("Mirror sync failed: " + error); }
 			try { ::BBCoop.Mirror.markTurn(e); } catch (error) {}
+			try
+			{
+				local notice = null;
+				if (e.getFaction() == ::Const.Faction.Player)
+				{
+					local owner = ::BBCoop.Remote.getOwner(e);
+					notice = owner == null || !::BBCoop.Remote.controls(e) ? "It's your turn" : owner + "'s turn";
+				}
+				::BBCoop.Connection.setTurnNotice(notice);
+			}
+			catch (error) {}
 		}
 
 		local remote = false;

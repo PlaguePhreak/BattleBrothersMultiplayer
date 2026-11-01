@@ -1,6 +1,7 @@
 this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	m = {
-		BotEnabled = false
+		BotEnabled = false,
+		TurnNotice = null
 	},
 
 	function create()
@@ -193,6 +194,13 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	}
 
 	// Our turn in the real battlefield while its turn bar shows someone else: the action strip
+	function setTurnNotice( _text )
+	{
+		if (_text == this.m.TurnNotice) return;
+		this.m.TurnNotice = _text;
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setTurnNotice", _text);
+	}
+
 	function setMirrorTurn( _data )
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("setMirrorTurn", _data);

@@ -360,6 +360,7 @@
 		if (this.HostBattleID == null) return;
 		local battleID = this.HostBattleID;
 		this.HostBattleID = null;
+		try { ::BBCoop.Connection.setTurnNotice(null); } catch (error) {}
 		this.GatherUntil = 0.0;
 		this.FirstRoundHeld = false;
 		this.LateJoins.clear();

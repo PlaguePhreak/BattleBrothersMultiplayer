@@ -409,6 +409,26 @@ BBCoopConnection.prototype.setBattleMirror = function (_data)
 		this.showBattleView(this.mBattle.host, this.mBattle.view);
 };
 
+// Turn notice in a shared battle (Aaron's ask): top right, "It's your turn" on the screen of the
+// player whose brother acts, "<name>'s turn" for the host while a friend's brother acts
+BBCoopConnection.prototype.setTurnNotice = function (_text)
+{
+	if (!_text)
+	{
+		if (this.mTurnNotice) { this.mTurnNotice.remove(); this.mTurnNotice = null; }
+		return;
+	}
+	if (!this.mTurnNotice)
+	{
+		this.mTurnNotice = $('<div class="text-font-normal"/>').css({
+			position: 'fixed', right: '1.5rem', top: '7.5rem', 'z-index': 99000, 'pointer-events': 'none',
+			background: 'rgba(10, 8, 5, 0.9)', border: '0.15rem solid #c8a040', padding: '0.6rem 1.4rem',
+			color: '#f0d060', 'font-size': '1.8rem', 'text-align': 'center'
+		}).appendTo($('body'));
+	}
+	this.mTurnNotice.text(_text);
+};
+
 // Action strip in the real battlefield: our brother's skills, wait and end turn. Shown only on our
 // turns while the game's turn bar shows someone else (otherwise its own skill bar is there).
 // Targets are picked by clicking the map.

@@ -340,6 +340,13 @@
 		_unit.morale <- _e.getMoraleState();
 		_unit.ah <- this.armorOf(_e, ::Const.ItemSlot.Head);
 		_unit.ab <- this.armorOf(_e, ::Const.ItemSlot.Body);
+		// crossbows and handgonnes: loaded or not decides whether shoot or reload is offered
+		try
+		{
+			local w = _e.getItems().getItemAtSlot(::Const.ItemSlot.Mainhand);
+			if (w != null && ("IsLoaded" in w.m)) _unit.ld <- w.m.IsLoaded;
+		}
+		catch (error) {}
 		local info = ::BBCoop.Battle.MirrorOwners[_owner];
 		if (!(_e.getID() in info.sent))
 		{
@@ -675,6 +682,21 @@
 		}
 		if (_e.getActionPoints() != _u.ap) { _e.setActionPoints(_u.ap); changed = true; }
 		if (_e.getFatigue() != _u.fat) { _e.setFatigue(_u.fat); changed = true; }
+		if ("ld" in _u)
+		{
+			try
+			{
+				local w = _e.getItems().getItemAtSlot(::Const.ItemSlot.Mainhand);
+				if (w != null && ("IsLoaded" in w.m) && w.m.IsLoaded != _u.ld)
+				{
+					if ("setLoaded" in w) w.setLoaded(_u.ld);
+					else w.m.IsLoaded = _u.ld;
+					try { _e.getSkills().update(); } catch (e2) {}
+					changed = true;
+				}
+			}
+			catch (error) {}
+		}
 		if (_e.getMoraleState() != _u.morale)
 		{
 			try { _e.setMoraleState(_u.morale); } catch (error) {}
@@ -972,8 +994,9 @@
 	// someone else; with the turn bar on our brother the game's own skill bar does the job
 	function updateStrip( _matched )
 	{
+		// Aaron (v0.38.0): no extra strip, the game's own skill bar and the map are the controls
 		local key = null;
-		if (this.isOurTurn() && !_matched)
+		if (false && this.isOurTurn() && !_matched)
 		{
 			local state = this.getState();
 			local selected = state != null && state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected ? state.m.SelectedSkillID : "";
@@ -1144,6 +1167,7 @@
 			try { active.onUpdate(); } catch (error) {}
 		}
 		this.updateStrip(matched);
+		::BBCoop.Connection.setTurnNotice(this.isOurTurn() ? "It's your turn" : null);
 		// our brother's turn: the map takes clicks (onMouse), whether or not the bar shows him
 		// (only our own brother's pending move holds the input: another unit the copy can't place
 		// used to keep the input locked for the whole turn)
@@ -1209,7 +1233,13 @@
 		local mine = this.getTurnEntity();
 		local active = null;
 		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
-		if (mine == null || active == null || active.getID() != mine.getID()) return false;
+		if (mine == null || active == null) return false;
+		if (active.getID() != mine.getID())
+		{
+			// the turn bar gave up on reaching our brother: the game's End turn / Wait still count
+			local gaveUp = this.CycleTries >= this.Units.len() * 2 + 4;
+			return gaveUp && ::Time.getRealTimeF() - this.LastCycle > 1.0;
+		}
 		if (active.getID() != this.SeenActiveID) return false;
 		return ::Time.getRealTimeF() - this.ActiveSince > 1.0;
 	}
@@ -1248,6 +1278,7 @@
 	function onTacticalFinish()
 	{
 		this.MarkRef = null;
+		::BBCoop.Connection.setTurnNotice(null);
 		if (!this.Active && this.Scene == null) return;
 		this.Active = false;
 		this.Scene = null;
