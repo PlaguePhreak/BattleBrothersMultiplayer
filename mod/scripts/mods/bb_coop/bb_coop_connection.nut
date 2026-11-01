@@ -291,7 +291,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				seed = ::BBCoop.Ghosts.getSeed(),
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
-				bodyBrush = brushes.bodyBrush
+				bodyBrush = brushes.bodyBrush,
+				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
 		catch (error)

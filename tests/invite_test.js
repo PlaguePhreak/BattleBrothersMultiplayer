@@ -37,12 +37,12 @@ const fails = [];
 function check(ok, what) { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) fails.push(what); }
 
 setTimeout(async () => {
-  await post('/host', { host: 'Ärön', name: "Aaron's company", day: 3, max: 4, protocol: 3, modVersion: '0.16.0', dlcs: ['Wildmen'] });
+  await post('/host', { host: 'Ärön', name: "Aaron's company", day: 3, max: 4, protocol: 4, modVersion: '0.16.0', dlcs: ['Wildmen'] });
   const inv = await get('/invite');
   check(/^BB1-[A-Za-z0-9_-]+$/.test(inv.code), 'relay makes a BB1- code: ' + inv.code);
   check(inv.address === 'https://brave-wolves.trycloudflare.com', '--address is used');
 
-  const me = makeClient(null, { playerName: 'Ben', protocol: 3, modVersion: '0.16.0', dlcs: ['Wildmen'], savedHosts: '' });
+  const me = makeClient(null, { playerName: 'Ben', protocol: 4, modVersion: '0.16.0', dlcs: ['Wildmen'], savedHosts: '' });
   const parsed = me.parseInvite(inv.code);
   check(parsed && parsed.url === 'https://brave-wolves.trycloudflare.com' && parsed.host === 'Ärön', 'code decodes to address and host name (non-ASCII too)');
   check(me.parseInvite('100.101.2.3').url === 'http://100.101.2.3:7777', 'plain address gets http:// and :7777');

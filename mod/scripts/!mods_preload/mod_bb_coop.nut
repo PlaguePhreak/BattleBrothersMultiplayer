@@ -1,8 +1,8 @@
 ::BBCoop <- {
 	ID = "mod_bb_coop",
-	Version = "0.18.0",
+	Version = "0.20.0",
 	// bumped only when the messages between games change; games with a different protocol cannot play together
-	Protocol = 3,
+	Protocol = 4,
 	Name = "Battle Brothers Co-op"
 };
 
