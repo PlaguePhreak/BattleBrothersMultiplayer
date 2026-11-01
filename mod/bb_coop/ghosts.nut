@@ -87,6 +87,9 @@
 			// enemies can go after the other player's company: when one catches it, world.nut
 			// tells that player's game to start the fight there instead of fighting the ghost
 			party.setAttackableByAI(true);
+			// not by the player: a Ctrl+click force-attack on a player-faction party made vanilla look
+			// up a faction that doesn't exist and crashed the game (v0.43.1)
+			party.setAttackable(false);
 			party.setVisibleInFogOfWar(true);
 			party.getFlags().set("BBCoopGhost", _from);
 			this.setBrush(party, "base", "baseBrush" in _payload ? _payload.baseBrush : null, "world_base_07");

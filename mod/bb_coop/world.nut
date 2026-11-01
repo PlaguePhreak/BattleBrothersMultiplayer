@@ -580,11 +580,18 @@
 		// vanilla names location scripts after their type: location.bandit_camp -> bandit_camp_location
 		if ((script == null || script == "") && _l.ty.find("location.") == 0)
 			script = "scripts/entity/world/locations/" + _l.ty.slice(9) + "_location";
-		if (script == null || script == "") return;
+		if (script == null || script == "") return false;
 		local pos = ::createVec(_l.x.tofloat(), _l.y.tofloat());
 		local coords = ::World.worldToTile(pos);
-		if (::World.getTile(coords).IsOccupied) return;
+		if (::World.getTile(coords).IsOccupied) return false; // a camp of ours still fading out there: next time
 		local loc = ::World.spawnLocation(script, coords);
+		local k = _l.k.tointeger();
+		this.Spawned[k] <- ::WeakTableRef(loc);
+		if (loc.getTile().ID != k && !this.KeyMismatchLogged)
+		{
+			this.KeyMismatchLogged = true;
+			::BBCoop.log(format("World sync: %s spawned on tile %i, the host has it on tile %i (pos %i,%i)", _l.n, loc.getTile().ID, k, _l.x.tointeger(), _l.y.tointeger()));
+		}
 		try { loc.onSpawned(); } catch (error) {}
 		local f = _l.ft >= 0 ? this.findFaction(_l.f, _l.ft) : null;
 		if (f != null) f.addSettlement(loc, false);
@@ -603,6 +610,23 @@
 		{
 			::BBCoop.log("Could not copy the loot of " + _l.n + ": " + error);
 		}
+		return true;
+	}
+
+	// camps we spawned for the host's snapshot: host tile key -> WeakTableRef (v0.43.1, so a camp
+	// counts as the host's even if the engine put it on a neighbouring tile)
+	Spawned = {},
+	KeyMismatchLogged = false,
+
+	function spawnedKeyOf( _loc )
+	{
+		local id = _loc.getID();
+		foreach (k, ref in this.Spawned)
+		{
+			if (ref == null || ref.isNull()) continue;
+			if (ref.get().getID() == id) return k;
+		}
+		return null;
 	}
 
 	function syncLocations( _refs )
@@ -610,12 +634,16 @@
 		local want = {};
 		foreach (l in this.Snapshot.locations) want[l.k.tointeger()] <- l;
 		local have = {};
-		local removed = 0, added = 0;
+		local removed = 0, added = 0, skipped = 0;
+		foreach (k, ref in clone this.Spawned)
+			if (ref == null || ref.isNull() || !ref.get().isAlive()) delete this.Spawned[k];
 
 		foreach (loc in clone ::World.EntityManager.getLocations())
 		{
 			if (loc == null || !loc.isAlive() || loc.isInCombat()) continue;
 			local k = loc.getTile().ID;
+			local spawnedKey = this.spawnedKeyOf(loc);
+			if (spawnedKey != null && (spawnedKey in want)) k = spawnedKey;
 			if (loc.isLocationType(::Const.World.LocationType.AttachedLocation))
 			{
 				// burned or rebuilt farms, mines and the like
@@ -637,7 +665,10 @@
 			}
 			if (this.isKept(loc, _refs)) continue;
 			if (loc.hasLabel("name")) loc.getLabel("name").Visible = false;
-			loc.die();
+			// fadeOutAndDie marks it dead at once (die() alone left it alive and "removed" again
+			// every 5 seconds, v0.43.1)
+			if ("fadeOutAndDie" in loc) loc.fadeOutAndDie();
+			else loc.die();
 			removed++;
 		}
 
@@ -646,15 +677,16 @@
 			if (l.at || (k in have)) continue;
 			try
 			{
-				this.spawnLocation(l);
-				added++;
+				if (this.spawnLocation(l)) added++;
+				else skipped++;
 			}
 			catch (error)
 			{
 				::BBCoop.log("Could not add " + l.n + ": " + error);
 			}
 		}
-		if (removed != 0 || added != 0) ::BBCoop.log(format("World sync: removed %i camps, added %i", removed, added));
+		if (removed != 0 || added != 0 || skipped != 0)
+			::BBCoop.log(format("World sync: removed %i camps, added %i%s", removed, added, skipped != 0 ? format(", %i wait for a free tile", skipped) : ""));
 	}
 
 	function syncSettlements()

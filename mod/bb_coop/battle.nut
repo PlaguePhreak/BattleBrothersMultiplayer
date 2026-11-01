@@ -878,6 +878,39 @@
 	}
 });
 
+// Vanilla's startCombat returns false when nobody is left to fight at the battle position (the
+// parties moved apart while the dialog was open), but loading_screen_onScreenShown then hides the
+// world map anyway and the loading screen stays up for good. Back to the map instead (v0.43.1).
+::BBCoop.Battle.CombatAborted <- false;
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.startCombat = @(__original) function( _pos )
+	{
+		local ok = __original(_pos);
+		if (ok == false)
+		{
+			::BBCoop.Battle.CombatAborted = true;
+			::BBCoop.log("No battle: nobody left to fight at the battle position.");
+		}
+		return ok;
+	}
+
+	q.loading_screen_onScreenShown = @(__original) function()
+	{
+		::BBCoop.Battle.CombatAborted = false;
+		__original();
+		if (!::BBCoop.Battle.CombatAborted) return;
+		::BBCoop.Battle.CombatAborted = false;
+		try
+		{
+			this.show();
+			::LoadingScreen.hide();
+			this.m.MenuStack.popAll(true);
+			::BBCoop.notify("The enemy is gone: there was nobody left to fight.");
+		}
+		catch (error) { ::BBCoop.log("Returning to the map after an empty battle failed: " + error); }
+	}
+});
+
 // Leaving the campaign (main menu, loading a save) ends any battle we were following
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
 	q.onFinish = @(__original) function()

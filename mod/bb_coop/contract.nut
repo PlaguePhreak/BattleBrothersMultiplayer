@@ -580,6 +580,16 @@
 				return;
 			}
 		}
+		// Not while a combat dialog, menu or loading screen is up, or the game is paused: moving the
+		// company then carried it away from the party attacking it, and the battle it agreed to had
+		// nobody left to fight at its position (vanilla startCombat gave up and the loading screen
+		// never went away, v0.43.1)
+		try
+		{
+			if (state.isPaused() || state.m.MenuStack.hasBacksteps() || ::LoadingScreen.isVisible()) return;
+		}
+		catch (error) {}
+		if (::BBCoop.Battle.CombatArgs != null) return;
 		local pos = this.getEscortPos(owner);
 		local offset = this.getEscortOffset();
 		state.getPlayer().setPos(::createVec(pos.X + offset.X, pos.Y + offset.Y));
