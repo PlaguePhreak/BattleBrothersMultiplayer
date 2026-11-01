@@ -308,6 +308,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
 				bodyBrush = brushes.bodyBrush,
+				banner = ::World.Assets.getBanner(),
 				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
