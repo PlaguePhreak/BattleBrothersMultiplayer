@@ -946,6 +946,8 @@
 		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
 		local targetID = this.View != null && ("activeID" in this.View) ? this.View.activeID : null;
 		local target = this.getUnit(targetID);
+		local activeNow = active != null ? active.getID() : null;
+		if (activeNow != this.SeenActiveID) { this.SeenActiveID = activeNow; this.ActiveSince = now; }
 		local matched = this.updateTurnBar(now, active, targetID, this.isOurTurn() ? target : null);
 		if (matched)
 		{
@@ -1002,6 +1004,39 @@
 	}
 
 	// End turn / wait in the copy (buttons or keys)
+	// The game's own end turn / wait (button, key, End round) count only when the player could have
+	// pressed them: the turn bar shows our brother and has rested on him for a moment. While the bar
+	// catches up, the game ends turns by itself as units enter the first slot; those used to reach the
+	// host as our "end turn" and skipped our brother.
+	SeenActiveID = null,
+	LastIgnoredLog = 0.0,
+	ActiveSince = 0.0,
+	function isPlayerEnding()
+	{
+		if (!this.isOurTurn() || this.Advancing) return false;
+		local mine = this.getTurnEntity();
+		local active = null;
+		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+		if (mine == null || active == null || active.getID() != mine.getID()) return false;
+		if (active.getID() != this.SeenActiveID) return false;
+		return ::Time.getRealTimeF() - this.ActiveSince > 1.0;
+	}
+
+	function onGameEndTurn()
+	{
+		if (this.isPlayerEnding()) this.onEndTurn();
+		else if (this.isOurTurn() && ::Time.getRealTimeF() - this.LastIgnoredLog > 10.0)
+		{
+			this.LastIgnoredLog = ::Time.getRealTimeF();
+			::BBCoop.log("Ignored an end of turn the copy's turn bar made by itself");
+		}
+	}
+
+	function onGameWait()
+	{
+		if (this.isPlayerEnding()) this.onWait();
+	}
+
 	function onEndTurn()
 	{
 		if (this.isOurTurn() && !this.Busy) this.sendOrder({ action = "end" });
@@ -1158,7 +1193,7 @@
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
 		{
-			try { ::BBCoop.Mirror.onEndTurn(); } catch (error) {}
+			try { ::BBCoop.Mirror.onGameEndTurn(); } catch (error) {}
 			return;
 		}
 		local args = [this];
@@ -1173,7 +1208,7 @@
 	{
 		if (::BBCoop.Mirror.Active)
 		{
-			try { ::BBCoop.Mirror.onEndTurn(); } catch (error) {}
+			try { ::BBCoop.Mirror.onGameEndTurn(); } catch (error) {}
 			return;
 		}
 		local args = [this];
@@ -1198,7 +1233,7 @@
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
 		{
-			try { ::BBCoop.Mirror.onWait(); } catch (error) {}
+			try { ::BBCoop.Mirror.onGameWait(); } catch (error) {}
 			return true;
 		}
 		return __original(_entity);
