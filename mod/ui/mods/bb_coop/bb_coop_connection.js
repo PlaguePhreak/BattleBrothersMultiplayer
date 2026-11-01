@@ -597,6 +597,10 @@ BBCoopConnection.prototype.parseInvite = function (_text)
 {
 	var text = $.trim(_text || '');
 	if (text === '') return null;
+	// a code or address pasted several times in a row: use the first copy
+	var unit = BBCoopConnection.repeatedUnit(text.replace(/\s+/g, ''));
+	if (unit !== null) text = unit;
+	if (/^BB1-/i.test(text) && /.BB1-/i.test(text)) text = 'BB1-' + $.trim(text.split(/BB1-/i)[1]);
 	if (/^BB1-/i.test(text))
 	{
 		var raw = this.decodeBase64Url(text.substr(4));
@@ -1078,15 +1082,78 @@ BBCoopConnection.prototype.makeInput = function (_parent, _value, _width, _onEnt
 	input.on('focus', function () { self.setTyping(true); });
 	input.on('blur', function () { self.setTyping(false); });
 	input.on('mousedown click', function (_event) { _event.stopPropagation(); input.focus(); });
+
+	// Ctrl+V pastes once (v0.17.1). In the game's UI one Ctrl+V could paste the text many
+	// times (key repeat, or the game passing the key on more than once), which turned an
+	// invite code into junk. Repeats are blocked, and if a paste still lands several
+	// copies of the same text, they are cut back to one.
+	var lastPaste = 0, prevValue = input.val();
+	var now = function () { return new Date().getTime(); };
 	input.on('keydown', function (_event)
 	{
 		_event.stopPropagation();
 		var code = _event.which || _event.keyCode;
+		if (code === 86 && (_event.ctrlKey || _event.metaKey))
+		{
+			if (_event.originalEvent && _event.originalEvent.repeat) { _event.preventDefault(); return; }
+			if (now() - lastPaste < 400) { _event.preventDefault(); return; }
+			lastPaste = now();
+			prevValue = input.val();
+		}
 		if (code === 13 && _onEnter) { _event.preventDefault(); _onEnter(); }
 		else if (code === 27 && _onEscape) { _event.preventDefault(); _onEscape(); }
 	});
-	input.on('keyup keypress', function (_event) { _event.stopPropagation(); });
+	input.on('paste', function (_event)
+	{
+		_event.stopPropagation();
+		if (now() - lastPaste < 400 && input.data('bbcoopPasted')) { _event.preventDefault(); return; }
+		lastPaste = now();
+		input.data('bbcoopPasted', true);
+		setTimeout(function () { input.data('bbcoopPasted', false); }, 400);
+		prevValue = input.val();
+	});
+	var collapse = function ()
+	{
+		var value = input.val();
+		if (now() - lastPaste < 1500 && value !== prevValue)
+		{
+			var fixed = self.collapsePaste(prevValue, value);
+			if (fixed !== value) { input.val(fixed); value = fixed; }
+		}
+		prevValue = value;
+	};
+	input.on('input change', collapse);
+	input.on('keyup', function (_event) { _event.stopPropagation(); collapse(); });
+	input.on('keypress', function (_event) { _event.stopPropagation(); });
 	return input;
+};
+
+// _before -> _after was one paste. If what it inserted is the same text 2+ times, keep it once.
+BBCoopConnection.prototype.collapsePaste = function (_before, _after)
+{
+	var start = 0;
+	while (start < _before.length && start < _after.length && _before.charAt(start) === _after.charAt(start)) start++;
+	var end = 0;
+	while (end < _before.length - start && end < _after.length - start
+		&& _before.charAt(_before.length - 1 - end) === _after.charAt(_after.length - 1 - end)) end++;
+	var inserted = _after.substring(start, _after.length - end);
+	var unit = BBCoopConnection.repeatedUnit(inserted);
+	if (unit === null) return _after;
+	return _after.substring(0, start) + unit + _after.substring(_after.length - end);
+};
+
+// "abcabcabc" -> "abc"; null when the text is not one piece repeated (pieces of 3+ characters)
+BBCoopConnection.repeatedUnit = function (_text)
+{
+	var n = _text.length;
+	for (var len = 3; len <= n / 2; len++)
+	{
+		if (n % len !== 0) continue;
+		var unit = _text.substr(0, len), ok = true;
+		for (var i = len; i < n && ok; i += len) ok = _text.substr(i, len) === unit;
+		if (ok) return unit;
+	}
+	return null;
 };
 
 BBCoopConnection.prototype.setTyping = function (_typing)
