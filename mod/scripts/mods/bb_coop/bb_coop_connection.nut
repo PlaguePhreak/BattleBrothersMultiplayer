@@ -179,10 +179,33 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	// The joiner left the new campaign screen without starting
+	function cancelJoin( _data )
+	{
+		if (::BBCoop.Join.Pending != null) ::BBCoop.log("Join cancelled on the new campaign screen.");
+		::BBCoop.Join.Pending = null;
+	}
+
 	// The real battlefield (mirror.nut) is up: the battle panel only shows when it can't be used
 	function setBattleMirror( _on, _fallback )
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("setBattleMirror", { on = _on, fallback = _fallback });
+	}
+
+	// Our turn in the real battlefield while its turn bar shows someone else: the action strip
+	function setMirrorTurn( _data )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setMirrorTurn", _data);
+	}
+
+	function mirrorSkill( _id )
+	{
+		::BBCoop.Mirror.onStripSkill(_id);
+	}
+
+	function mirrorOrder( _action )
+	{
+		::BBCoop.Mirror.onStripOrder(_action);
 	}
 
 	function closeBattlePanel()
@@ -292,6 +315,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
 				bodyBrush = brushes.bodyBrush,
+				banner = ::World.Assets.getBanner(),
 				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
@@ -317,6 +341,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "battle_start":
 				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
+				break;
+			case "battle_decline":
+				::BBCoop.Battle.onDecline(_msg.from, _msg.payload);
 				break;
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
@@ -392,6 +419,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "contract_done":
 				::BBCoop.Contract.onDone(_msg.from, _msg.payload);
+				break;
+			case "contract_track":
+				::BBCoop.Contract.onTrack(_msg.from, _msg.payload);
 				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);

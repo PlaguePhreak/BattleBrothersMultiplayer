@@ -26,11 +26,41 @@
 		local info = { to = _from, seed = seed, x = pos.X, y = pos.Y, dlcs = ::BBCoop.getDLCs(), day = ::World.getTime().Days };
 		// the joiner plays our campaign: same combat and economic difficulty
 		try { info.cd <- ::World.Assets.getCombatDifficulty(); info.ed <- ::World.Assets.getEconomicDifficulty(); } catch (error) {}
+		// v0.30.0: and every other campaign setting of ours, forced on the joiner's new campaign
+		try
+		{
+			info.im <- ::World.Assets.isIronman();
+			info.pd <- ::World.Assets.m.IsPermanentDestruction;
+			info.ex <- ::World.Assets.m.IsExplorationMode;
+			info.ge <- ::World.FactionManager.getGreaterEvil().Type;
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not read all campaign settings for " + _from + ": " + error);
+		}
 		::BBCoop.Connection.sendMessage("session_info", info);
 		::BBCoop.notify(_from + " is joining your world.");
 	}
 
 	// ---- joiner ----
+
+	// The new campaign screen's choices, with everything but origin, banner and name replaced
+	// by the host's settings (v0.30.0). Called from world_state.setNewCampaignSettings.
+	function forceHostSettings( _settings )
+	{
+		local info = this.Pending;
+		if (info == null) return;
+		_settings.Seed = info.seed;
+		if (("cd" in info) && info.cd != null) _settings.Difficulty = info.cd;
+		if (("ed" in info) && info.ed != null) _settings.EconomicDifficulty = info.ed;
+		if (("im" in info) && info.im != null) _settings.Ironman = info.im;
+		if (("pd" in info) && info.pd != null) _settings.PermanentDestruction = info.pd;
+		if (("ex" in info) && info.ex != null) _settings.ExplorationMode = info.ex;
+		if (("ge" in info) && info.ge != null) _settings.GreaterEvil = info.ge;
+		_settings.BudgetDifficulty = 1; // starting funds aren't kept in a save: every joiner gets Medium
+		::BBCoop.log(format("Joining with %s's campaign settings (difficulty %s/%s, ironman %s, unexplored %s)", info.host, "" + _settings.Difficulty, "" + _settings.EconomicDifficulty, "" + _settings.Ironman, "" + _settings.ExplorationMode));
+	}
+
 	function start( _info )
 	{
 		this.Pending = _info;
@@ -119,6 +149,13 @@
 };
 
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.setNewCampaignSettings = @(__original) function( _settings )
+	{
+		try { ::BBCoop.Join.forceHostSettings(_settings); }
+		catch (error) { ::BBCoop.log("Forcing the host's campaign settings failed: " + error); }
+		return __original(_settings);
+	}
+
 	q.startNewCampaign = @(__original) function()
 	{
 		local seed = null;
@@ -132,5 +169,26 @@
 		{
 			::BBCoop.log("Placing the company next to the host failed: " + error);
 		}
+	}
+});
+
+// Same origin, different brothers (v0.26.0): the new campaign seeds the dice with the map seed
+// right before the origin rolls its starting brothers, so a joiner who picked the host's origin
+// got the host's exact brothers. A joiner's company is rolled from the map seed plus their name
+// instead (the map itself is built before this, from the seed alone, so it still matches).
+// Checked against vanilla world_state.startNewCampaign (seedRandomString, then onSpawnPlayer).
+::BBCoop.MH.hookTree("scripts/scenarios/world/starting_scenario", function(q) {
+	q.onSpawnPlayer = @(__original) function()
+	{
+		try
+		{
+			local info = ::BBCoop.Join.Pending;
+			if (info != null) ::Math.seedRandomString(info.seed + "|" + ::BBCoop.getSetting("PlayerName"));
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not reroll the starting company: " + error);
+		}
+		return __original();
 	}
 });

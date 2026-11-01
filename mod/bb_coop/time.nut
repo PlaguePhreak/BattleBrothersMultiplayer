@@ -1,10 +1,12 @@
 // Shared world time (v0.18.0). Everyone in a session is on the same day and hour.
 //
 // The host keeps one session clock and sends it every second ("world_time"). Every game, the
-// host's included, sets its world time to that clock whenever it drifts away. The clock never
-// stops: pausing, a town, the inventory or a contract screen stop only your own company, and
-// the day keeps counting (in vanilla these pause the world; in a session the clock moves on).
-// A battle stops your world as usual; when it ends you come back to the shared day.
+// host's included, sets its world time to that clock whenever it drifts away.
+// Pausing (v0.24.0): when the host pauses (spacebar or the pause button), the clock stops and
+// every joiner's world pauses with it until the host unpauses; joiners can't unpause meanwhile.
+// A joiner's own pause, a town, the inventory or a contract screen stop only that player's
+// company while the day keeps counting. A battle stops your world as usual; when it ends you
+// come back to the shared day.
 //
 // Speed: the host's speed buttons set the session speed for everyone. While any player is in a
 // battle (their own, or with their brothers away in someone else's), the clock is held at the
@@ -25,11 +27,13 @@
 	// host
 	Clock = null,           // { T, Real, Speed } while someone is following our world
 	LastSent = -100.0,
+	SentSpeed = -1.0,       // speed in the last "world_time", so a pause goes out at once
 	Fighting = {},          // player -> real time of their last "busy" with b = true
 
 	// joiner
 	Remote = null,          // { T, Recv, Speed, From } from the host's last "world_time"
 	LastFightingText = "",
+	PausedByHost = false,   // we paused our world because the host paused
 	Arrived = false,        // the first big jump to the host's day was made
 
 	// both
@@ -44,6 +48,8 @@
 		this.LastFightingText = "";
 		this.Arrived = false;
 		this.WasBusy = false;
+		this.PausedByHost = false;
+		this.SentSpeed = -1.0;
 	}
 
 	function normalSpeed()
@@ -91,6 +97,15 @@
 		return ::Math.maxf(this.normalSpeed(), ::Math.minf(speed, ::Const.World.SpeedSettings.VeryFastMult));
 	}
 
+	// The host pressed pause (not a town or menu, which only pause the host's own company).
+	// In a battle the world's pause doesn't count: the battle lock holds the clock at normal.
+	function isHostPaused()
+	{
+		if (this.isBusy()) return false;
+		try { return ::World.State.m.IsGamePaused == true; } catch (error) {}
+		return false;
+	}
+
 	function updateHost( _now )
 	{
 		if (!::BBCoop.World.hasFollowers())
@@ -110,12 +125,14 @@
 			this.Clock.T += (_now - this.Clock.Real) * this.Clock.Speed;
 			this.Clock.Real = _now;
 		}
-		this.Clock.Speed = fighters.len() != 0 ? this.normalSpeed() : this.getHostSpeed();
+		if (this.isHostPaused()) this.Clock.Speed = 0.0;
+		else this.Clock.Speed = fighters.len() != 0 ? this.normalSpeed() : this.getHostSpeed();
 		this.showFighters(fighters);
 
-		if (_now - this.LastSent >= this.SendSeconds)
+		if (_now - this.LastSent >= this.SendSeconds || this.Clock.Speed != this.SentSpeed)
 		{
 			this.LastSent = _now;
+			this.SentSpeed = this.Clock.Speed;
 			::BBCoop.Connection.sendMessage("world_time", { t = this.Clock.T, sp = this.Clock.Speed, f = fighters });
 		}
 	}
@@ -140,6 +157,7 @@
 		if (!::BBCoop.World.isFromHost(_from)) return;
 		this.Remote = { T = _payload.t.tofloat(), Recv = ::Time.getRealTimeF(), Speed = _payload.sp.tofloat(), From = _from };
 		this.showFighters(_payload.f);
+		this.followHostPause();
 	}
 
 	function getJoinerTarget( _now )
@@ -258,12 +276,42 @@
 		this.apply(now);
 	}
 
+	// Joiner: pause while the host is paused, unpause when the host does (only if we paused)
+	function followHostPause()
+	{
+		if (::BBCoop.World.getHost() == null || ::BBCoop.Battle.isInTactical()) return;
+		try { if (::Tactical.isVisible()) return; } catch (error) {}
+		local hostPaused = this.Remote != null && this.Remote.Speed <= 0 && this.getJoinerTarget(::Time.getRealTimeF()) != null;
+		if (hostPaused)
+		{
+			// also when we pressed spacebar meanwhile: only the host unpauses
+			if (!::World.State.m.IsGamePaused || !this.PausedByHost)
+			{
+				::World.State.setPause(true);
+				try { ::World.TopbarDayTimeModule.showMessage("PAUSED", "(" + this.Remote.From + " paused the game)"); } catch (error) {}
+				if (!this.PausedByHost) ::BBCoop.notify(this.Remote.From + " paused the game.");
+			}
+			this.PausedByHost = true;
+		}
+		else if (this.PausedByHost)
+		{
+			this.PausedByHost = false;
+			// our brothers away in a battle keep the world paused (battle.nut)
+			if (::BBCoop.Battle.PendingRefs == null && ::World.State.m.IsGamePaused) ::World.State.setPause(false);
+			if (this.Remote != null) ::BBCoop.notify(this.Remote.From + " unpaused the game.");
+		}
+	}
+
 	// Every world frame, after vanilla set the speed: everyone moves at the session speed
 	function onWorldUpdate()
 	{
+		local now = ::Time.getRealTimeF();
+		local joiner = ::BBCoop.World.getHost() != null;
+		if (joiner) this.followHostPause();
+		else if (this.Clock != null && this.isHostPaused() != (this.Clock.Speed <= 0)) this.updateHost(now); // pause goes out at once
 		local speed = this.getSpeed();
 		if (speed == null || speed <= 0) return;
-		if (::BBCoop.World.getHost() != null && this.getJoinerTarget(::Time.getRealTimeF()) == null) return;
+		if (joiner && this.getJoinerTarget(now) == null) return;
 		if (::World.State.isPaused()) return;
 		if (::World.getSpeedMult() != speed) ::World.setSpeedMult(speed);
 	}

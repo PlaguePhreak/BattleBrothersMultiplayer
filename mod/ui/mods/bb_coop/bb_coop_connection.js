@@ -334,14 +334,8 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
 		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
 		if (p.battleID === this.mBattleClosedID) return true;
-		if (this.mMirror && !this.mMirrorFallback) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
-		if (this.mMirror && p.turn === null)
-		{
-			// fallback: the panel is only for our turns, the battlefield shows the rest
-			this.mBattle = { host: _msg.from, view: p, skill: null };
-			if (this.mBattlePanel) this.setBattleHidden(true);
-			return true;
-		}
+		// the real battlefield is the control field: no panel (the game shows an action strip if needed)
+		if (this.mMirror) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
 		this.showBattleView(_msg.from, p);
 		return true;
 	}
@@ -405,14 +399,54 @@ BBCoopConnection.prototype.setBattleHidden = function (_hidden)
 	this.mBattleReopen.css('display', _hidden ? 'block' : 'none');
 };
 
-// Squirrel: the real battlefield is up (on), or can't take our turns (fallback: panel on our turns)
+// Squirrel: the real battlefield is up (on) or gone (off)
 BBCoopConnection.prototype.setBattleMirror = function (_data)
 {
 	this.mMirror = _data.on === true;
-	this.mMirrorFallback = _data.fallback === true;
-	if (this.mMirror && !this.mMirrorFallback) { this.removeBattlePanel(); return; }
-	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && (!this.mMirror || this.mBattle.view.turn !== null))
+	if (this.mMirror) { this.removeBattlePanel(); return; }
+	this.setMirrorTurn(null);
+	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID)
 		this.showBattleView(this.mBattle.host, this.mBattle.view);
+};
+
+// Action strip in the real battlefield: our brother's skills, wait and end turn. Shown only on our
+// turns while the game's turn bar shows someone else (otherwise its own skill bar is there).
+// Targets are picked by clicking the map.
+BBCoopConnection.prototype.setMirrorTurn = function (_data)
+{
+	var self = this;
+	if (this.mMirrorStrip) { this.mMirrorStrip.remove(); this.mMirrorStrip = null; }
+	if (!_data || !_data.turn) return;
+	var turn = _data.turn;
+	var strip = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '50%', bottom: '14rem', transform: 'translateX(-50%)', 'z-index': 99000,
+		background: 'rgba(10, 8, 5, 0.9)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', color: '#e8dcc0',
+		'font-size': '1.4rem', 'text-align': 'center', 'max-width': '90%'
+	}).appendTo($('body'));
+	$('<div/>').text('Your turn: ' + turn.name + ' (' + turn.ap + ' AP, fatigue ' + turn.fatigue + ' / ' + turn.fatigueMax + ')' +
+		(_data.busy ? ' - waiting for the host...' : ' - click a tile twice to move, or pick a skill and click a target')).css('margin-bottom', '0.4rem').appendTo(strip);
+	var button = function (_label, _enabled, _selected, _onClick)
+	{
+		var b = $('<span/>').text(_label).css({
+			display: 'inline-block', padding: '0.3rem 0.6rem', margin: '0.2rem', border: '0.1rem solid ' + (_selected ? '#f0d060' : '#8a6d3b'),
+			background: _selected ? 'rgba(240,208,96,0.2)' : 'rgba(255,255,255,0.05)', color: _enabled ? '#e8dcc0' : '#777', cursor: _enabled ? 'pointer' : 'default'
+		});
+		if (_enabled) b.click(_onClick);
+		return b.appendTo(strip);
+	};
+	for (var i = 0; i < turn.skills.length; i++)
+	{
+		(function (_skill)
+		{
+			button(_skill.name + ' (' + _skill.ap + ')', _skill.usable && !_data.busy, _data.selected === _skill.id, function ()
+			{
+				SQ.call(self.mSQHandle, 'mirrorSkill', _skill.id);
+			});
+		})(turn.skills[i]);
+	}
+	button('Wait', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'wait'); });
+	button('End turn', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'end'); });
+	this.mMirrorStrip = strip;
 };
 
 // Takes the panel off the screen but remembers the battle
@@ -425,6 +459,7 @@ BBCoopConnection.prototype.removeBattlePanel = function ()
 BBCoopConnection.prototype.closeBattlePanel = function ()
 {
 	if (this.mBattle && this.mBattle.view) this.mBattleClosedID = this.mBattle.view.battleID;
+	this.setMirrorTurn(null);
 	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
 	this.mBattlePanel = null;
 	this.mBattle = null;
@@ -1034,6 +1069,10 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	if (typeof _info.cd === 'number' && typeof _info.ed === 'number') { window.BBCoopPendingJoin.cd = _info.cd; window.BBCoopPendingJoin.ed = _info.ed; }
+	if (typeof _info.im === 'boolean') window.BBCoopPendingJoin.im = _info.im;
+	if (typeof _info.pd === 'boolean') window.BBCoopPendingJoin.pd = _info.pd;
+	if (typeof _info.ex === 'boolean') window.BBCoopPendingJoin.ex = _info.ex;
+	if (typeof _info.ge === 'number') window.BBCoopPendingJoin.ge = _info.ge;
 	this.showToast('Joining ' + _from + "'s campaign" + (_info.day ? ' (day ' + _info.day + ')' : '') + ". Pick your origin; the map, difficulty and day are set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
 };
@@ -1095,13 +1134,77 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 				this.mSeed.setInputText(pending.seed);
 				this.mSeed.attr('readonly', 'readonly');
 			}
+			if (pending)
+			{
+				try { this.bbcoopLockSettings(pending); }
+				catch (e) { console.error('BBCoop: could not lock the campaign settings: ' + e); }
+			}
 		};
 		var hide = NewCampaignMenuModule.prototype.hide;
 		NewCampaignMenuModule.prototype.hide = function ()
 		{
 			window.BBCoopPendingJoin = null;
 			if (this.mSeed) this.mSeed.removeAttr('readonly');
+			try { this.bbcoopUnlockSettings(); } catch (e) {}
 			return hide.apply(this, arguments);
+		};
+
+		// v0.30.0: a joiner picks only origin, company name and banner. Everything else shows the
+		// host's campaign settings, greyed out (the game forces them too, whatever is sent).
+		NewCampaignMenuModule.prototype.bbcoopLockable = function ()
+		{
+			return [this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox,
+				this.mEvilCrusadeCheckbox, this.mEvilPermanentDestructionCheckbox,
+				this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox,
+				this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox,
+				this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox,
+				this.mIronmanCheckbox, this.mExplorationCheckbox];
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopLockSettings = function (_pending)
+		{
+			var check = function (_box, _on) { if (_box) _box.iCheck(_on ? 'check' : 'uncheck'); };
+			var pick = function (_list, _index) { if (typeof _index === 'number' && _list[_index]) _list[_index].iCheck('check'); };
+			pick([this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox], _pending.cd);
+			pick([this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox], _pending.ed);
+			// starting funds aren't kept in a save, so joiners all start on Medium
+			pick([this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox], 1);
+			pick([this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox, this.mEvilCrusadeCheckbox], _pending.ge);
+			if (typeof _pending.im === 'boolean') check(this.mIronmanCheckbox, _pending.im);
+			if (typeof _pending.ex === 'boolean') check(this.mExplorationCheckbox, _pending.ex);
+			if (typeof _pending.pd === 'boolean') check(this.mEvilPermanentDestructionCheckbox, _pending.pd);
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('disable');
+			var text = 'Campaign settings come from ' + _pending.host + "'s world and can't be changed.";
+			if (!this.mBBCoopNote)
+			{
+				this.mBBCoopNote = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mDifficultySelectionPanel.prepend(this.mBBCoopNote);
+				this.mBBCoopNote2 = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mCompanyCrisisSelectionPanel.prepend(this.mBBCoopNote2);
+			}
+			this.mBBCoopNote.text(text).show();
+			this.mBBCoopNote2.text('Pick your company name and banner. ' + text).show();
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopUnlockSettings = function ()
+		{
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('enable');
+			if (this.mBBCoopNote) { this.mBBCoopNote.hide(); this.mBBCoopNote2.hide(); }
+		};
+
+		// leaving the screen without starting: the join is off
+		var cancel = NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed;
+		NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed = function ()
+		{
+			try
+			{
+				var screen = window.BBCoopScreen;
+				if (window.BBCoopPendingJoin && screen && screen.mSQHandle) SQ.call(screen.mSQHandle, 'cancelJoin', null);
+			}
+			catch (e) {}
+			return cancel.apply(this, arguments);
 		};
 	}
 })();

@@ -336,6 +336,7 @@
 		switch (_order.action)
 		{
 			case "end":
+				::BBCoop.log(_e.getName() + " (" + owner + ") ends his turn");
 				this.endTurn();
 				return;
 
@@ -419,6 +420,15 @@
 			return;
 		}
 
+		// join window before round 1 (battle.nut): nothing happens until the other players are in
+		try { if (::BBCoop.Battle.updateGather(this)) return; }
+		catch (error)
+		{
+			::BBCoop.log("Join window failed: " + error);
+			::BBCoop.Battle.GatherUntil = 0.0;
+			if (::BBCoop.Battle.FirstRoundHeld) { ::BBCoop.Battle.FirstRoundHeld = false; ::Tactical.TurnSequenceBar.initNextRound(); }
+		}
+
 		local e = null;
 		try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
 
@@ -432,6 +442,9 @@
 				if (id != ::BBCoop.Remote.TookOverID) ::BBCoop.Remote.TookOverID = null;
 				::BBCoop.Remote.onTurnChange(e);
 			}
+			try { ::BBCoop.Mirror.hostTick(e); }
+			catch (error) { ::BBCoop.log("Mirror sync failed: " + error); }
+			try { ::BBCoop.Mirror.markTurn(e); } catch (error) {}
 		}
 
 		local remote = false;
