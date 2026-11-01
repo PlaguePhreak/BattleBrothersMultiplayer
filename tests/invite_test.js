@@ -6,6 +6,8 @@ const { spawn } = require('child_process');
 const root = path.join(__dirname, '..');
 const src = fs.readFileSync(path.join(root, 'mod/ui/mods/bb_coop/bb_coop_connection.js'), 'utf8');
 const PORT = 19000 + Math.floor(Math.random() * 1000);
+// the relay only serves a host card of its own protocol (v0.42.0)
+const PROTO = Number(/const PROTOCOL = (\d+)/.exec(fs.readFileSync(path.join(root, 'relay/relay.js'), 'utf8'))[1]);
 const relay = spawn(process.execPath, [path.join(root, 'relay/relay.js'), String(PORT), '--address=https://brave-wolves.trycloudflare.com'], { stdio: 'ignore' });
 function FakeXHR() { this.readyState = 0; this.status = 0; this.responseText = ''; this.headers = {}; }
 FakeXHR.prototype.open = function (m, u) { this.m = m; this.u = new URL(u); };
@@ -37,12 +39,12 @@ const fails = [];
 function check(ok, what) { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) fails.push(what); }
 
 setTimeout(async () => {
-  await post('/host', { host: 'Ärön', name: "Aaron's company", day: 3, max: 4, protocol: 7, modVersion: '0.16.0', dlcs: ['Wildmen'] });
+  await post('/host', { host: 'Ärön', name: "Aaron's company", day: 3, max: 4, protocol: PROTO, modVersion: '0.16.0', dlcs: ['Wildmen'] });
   const inv = await get('/invite');
   check(/^BB1-[A-Za-z0-9_-]+$/.test(inv.code), 'relay makes a BB1- code: ' + inv.code);
   check(inv.address === 'https://brave-wolves.trycloudflare.com', '--address is used');
 
-  const me = makeClient(null, { playerName: 'Ben', protocol: 7, modVersion: '0.16.0', dlcs: ['Wildmen'], savedHosts: '' });
+  const me = makeClient(null, { playerName: 'Ben', protocol: PROTO, modVersion: '0.16.0', dlcs: ['Wildmen'], savedHosts: '' });
   const parsed = me.parseInvite(inv.code);
   check(parsed && parsed.url === 'https://brave-wolves.trycloudflare.com' && parsed.host === 'Ärön', 'code decodes to address and host name (non-ASCII too)');
   check(me.parseInvite('100.101.2.3').url === 'http://100.101.2.3:7777', 'plain address gets http:// and :7777');

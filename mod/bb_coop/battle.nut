@@ -588,6 +588,12 @@
 			this.releaseAway("Lost contact with " + this.PendingHost + " during the battle.");
 			return;
 		}
+		// a result kept for the world map that the combat-finished hook did not apply (v0.43.0 fallback)
+		if (::BBCoop.Mirror.Result != null && !::BBCoop.Mirror.Active && ::BBCoop.Mirror.Scene == null && !this.isInTactical())
+		{
+			::BBCoop.Mirror.onBackInWorld();
+			return;
+		}
 		this.checkOver();
 	}
 
@@ -771,6 +777,13 @@
 		local text = format("The battle with %s is over, your side %s. %i of your brothers came back", _from, ourSideWon ? "won" : "lost", survived);
 		if (died.len() != 0) text += ". Fallen: " + died.reduce(@(a, b) a + ", " + b);
 		::BBCoop.notify(text + ".");
+		if (::World.getPlayerRoster().getSize() == 0)
+		{
+			// nobody came back: start over in this world, or leave (v0.43.0)
+			try { ::BBCoop.Company.onWipedOut(format("Every brother of yours fell in %s's battle.", _from)); }
+			catch (error) { ::BBCoop.log("Wipe-out prompt failed: " + error); }
+			return;
+		}
 		try { this.offerKeptInvite(); } catch (error) {}
 	}
 };

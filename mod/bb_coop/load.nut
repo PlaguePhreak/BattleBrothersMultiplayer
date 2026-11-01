@@ -14,6 +14,31 @@ page.addStringSetting("SavedHosts", "", "Saved hosts", "Hosts in your join list 
 page.addStringSetting("CoopSaves", "", "Co-op saves", "Save files used in multiplayer, marked Co-op in the Load screen. Filled in automatically.");
 page.addBooleanSetting("RealBattleView", true, "Real battlefield in shared battles", "When you join another player's battle, watch and play it on a copy of their real battlefield. Off: the simple battle panel.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
+// Hosting: drop a player's stored company and send them back to the main menu to make a new one (v0.43.0)
+local resetName = page.addStringSetting("ResetCompanyOf", "", "Reset a player's company (hosting)", "Type the player's name exactly as shown in the session, then press the button below (or apply this field). Their company is removed from your save and their game goes back to the main menu; they make a new company when they join again.");
+local resetButton = null;
+try
+{
+	if ("addButtonSetting" in page) resetButton = page.addButtonSetting("ResetCompanyButton", "Reset that player's company", "Removes the company named above from your save and kicks that player to make a new one.");
+}
+catch (error) { resetButton = null; }
+if (resetButton != null)
+{
+	resetButton.addCallback(function( ... )
+	{
+		try { ::BBCoop.Company.resetPlayer(::BBCoop.getSetting("ResetCompanyOf")); }
+		catch (error) { ::BBCoop.log("Resetting a player's company failed: " + error); }
+	});
+}
+else
+{
+	resetName.addCallback(function( _value, ... )
+	{
+		if (!::MSU.Utils.hasState("world_state")) return; // settings loading at startup
+		try { ::BBCoop.Company.resetPlayer(_value); }
+		catch (error) { ::BBCoop.log("Resetting a player's company failed: " + error); }
+	});
+}
 
 ::BBCoop.getSetting <- function( _id )
 {

@@ -551,6 +551,7 @@
 	// tactical_state.initMap, before vanilla: same seed as the host
 	function beforeInitMap( _state )
 	{
+		this.Finishing = false; // a new fight starts: whatever closed before is done with
 		if (!this.isMirrorState(_state)) return false;
 		::Math.seedRandom(this.Scene.setup.seed.tointeger());
 		return true;
@@ -1122,6 +1123,9 @@
 		{
 			this.Leaving = false;
 			::BBCoop.log("Leaving the copy of " + this.Host + "'s battle");
+			// vanilla's world_state.onCombatFinished runs for this copy before tactical_state.onFinish
+			// does, so the flag must be up now (v0.43.0; set in onTacticalFinish it came too late)
+			this.Finishing = true;
 			_state.exitTactical();
 			return;
 		}
@@ -1286,14 +1290,13 @@
 		if (this.Active || this.Scene != null) this.Leaving = true;
 	}
 
-	// tactical_state.onFinish
-	Finishing = false,      // a copy just closed: vanilla's world_state.onCombatFinished runs for it next
+	// tactical_state.onFinish (after world_state.onCombatFinished, see Finishing)
+	Finishing = false,      // a copy is closing: vanilla's world_state.onCombatFinished runs for it, not for a fight of ours
 	function onTacticalFinish()
 	{
 		this.MarkRef = null;
 		::BBCoop.Connection.setTurnNotice(null);
 		if (!this.Active && this.Scene == null) return;
-		this.Finishing = true;
 		this.Active = false;
 		this.Scene = null;
 		this.Units.clear();
@@ -1315,7 +1318,9 @@
 		::BBCoop.Connection.setBattleMirror(false, false);
 	}
 
-	// world_state.onCombatFinished: back on the world map, the stored result can be applied
+	// world_state.onCombatFinished (and, as a fallback, the first world frames after): the stored
+	// result is applied. v0.42.x applied nothing here: the copy still counted as active, so the
+	// result went straight back into Result (keepResult) and the brothers came home as they left.
 	function onBackInWorld()
 	{
 		if (this.Result == null) return;
@@ -1327,6 +1332,7 @@
 	// battle_result while we watch the copy: keep it for the world map
 	function keepResult( _from, _payload )
 	{
+		if (this.Finishing) return false; // the copy is closing: apply it now
 		if (!this.Active && this.Scene == null) return false;
 		this.Result = { from = _from, payload = _payload };
 		::BBCoop.Battle.OverAt = null;

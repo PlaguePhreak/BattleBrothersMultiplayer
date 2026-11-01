@@ -308,6 +308,7 @@
 
 	function onTrack( _from, _payload )
 	{
+		if (!::MSU.Utils.hasState("world_state")) return; // still setting up the campaign (v0.43.0)
 		local h = this.getHelping();
 		if (h == null || h.owner != _from || h.id != _payload.id) return;
 		local old = this.Tracker;

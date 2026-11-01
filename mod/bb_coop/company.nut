@@ -27,6 +27,9 @@
 	Blocked = false,        // restoring went wrong, or the host keeps a newer copy: never overwrite it this session
 	WaitStart = null,       // when the joined world started waiting for the host's answer
 	LastSent = 0.0,
+	WipeAsked = null,       // when the "start over or leave" choice was last shown (v0.43.0)
+	Leaving = false,        // the player chose to leave after a wipe-out: vanilla's defeat screen is showing
+	KickedBy = null,        // the host reset our company: back to the main menu on the next world frame
 
 	function myName()
 	{
@@ -178,7 +181,10 @@
 	function update()
 	{
 		local host = this.joinedHost();
-		if (host == null || this.Blocked) return;
+		if (host == null) return;
+		if (this.KickedBy != null) { this.finishKick(); return; }
+		this.checkWipedOut();
+		if (this.Blocked) return;
 		if (!this.Ready)
 		{
 			if (this.Restore != null && this.Restore.host == host)
@@ -351,7 +357,198 @@
 		::BBCoop.notify(text);
 	}
 
+	// ---- joiner: every brother dead (v0.43.0) ----
+	// Vanilla shows the defeat screen when the roster is empty after a fight. In a joined world the
+	// player may instead start over with a new company (the origin's starting brothers, crowns and
+	// supplies, an empty stash) or leave the session, which drops their company from the host's save.
+
+	function checkWipedOut()
+	{
+		if (this.Leaving || !this.Ready) return;
+		if (::BBCoop.Battle.isInTactical() || ::BBCoop.Battle.PendingRefs != null) return;
+		if (("IsGameOver" in ::World.State.m) && ::World.State.m.IsGameOver) return;
+		if (::World.getPlayerRoster().getSize() != 0) { this.WipeAsked = null; return; }
+		try { if (!::World.State.isPaused()) ::World.State.setPause(true); } catch (error) {}
+		if (this.WipeAsked != null && ::Time.getRealTimeF() - this.WipeAsked < 20.0) return; // asked again if the window was closed
+		this.onWipedOut("Every brother of yours is dead.");
+	}
+
+	function onWipedOut( _why )
+	{
+		local host = this.joinedHost();
+		if (host == null || this.Leaving) return;
+		this.WipeAsked = ::Time.getRealTimeF();
+		::BBCoop.log("Company wiped out: " + _why);
+		::BBCoop.Connection.showPrompt({
+			id = "wipe",
+			title = "Your company is gone",
+			text = _why + " Start a new company here in " + host + "'s world (your origin's starting brothers, starting crowns and supplies, an empty stash), or leave the session. Leaving drops your company from " + host + "'s save; you start fresh if you join again.",
+			options = [
+				{ id = "new", label = "Start a new company" },
+				{ id = "leave", label = "Leave the session" }
+			]
+		});
+	}
+
+	function onPromptChoice( _id, _choice )
+	{
+		if (_id != "wipe") return;
+		if (_choice == "new") this.startNewCompany();
+		else if (_choice == "leave") this.leaveAfterWipe();
+	}
+
+	// vanilla world_state.showGameFinishScreen(false) in a joined world: offer the choice instead
+	function interceptDefeat()
+	{
+		if (this.Leaving || this.joinedHost() == null) return false;
+		if (this.KickedBy != null) return false;
+		try { ::World.State.setWorldmapMusic(true); } catch (error) {}
+		try { ::World.State.setPause(true); } catch (error) {}
+		this.onWipedOut("Every brother of yours is dead.");
+		return true;
+	}
+
+	// The origin's starting company again, as a new campaign gets it (asset_manager.setCampaignSettings
+	// for crowns and supplies by economic difficulty, then the origin's onSpawnAssets)
+	function startNewCompany()
+	{
+		local assets = ::World.Assets;
+		local roster = ::World.getPlayerRoster();
+		foreach (bro in clone roster.getAll()) roster.remove(bro);
+		try { assets.m.Stash.clear(); } catch (error) { ::BBCoop.log("Could not empty the stash: " + error); }
+		local diff = 1;
+		try { diff = assets.getEconomicDifficulty(); } catch (error) {}
+		if (diff < 0 || diff > 2) diff = 1;
+		local starts = [
+			{ money = 2500, ammo = 80, tools = 40, meds = 30 },
+			{ money = 2000, ammo = 40, tools = 20, meds = 20 },
+			{ money = 1500, ammo = 20, tools = 10, meds = 10 }
+		];
+		local start = starts[diff];
+		assets.m.Money = start.money;
+		assets.m.Ammo = start.ammo;
+		assets.m.ArmorParts = start.tools;
+		assets.m.Medicine = start.meds;
+		assets.m.BusinessReputation = 0;
+		try { assets.resetToDefaults(); } catch (error) { ::BBCoop.log("Could not reset the company bonuses: " + error); }
+		local origin = assets.getOrigin();
+		try { origin.onSpawnAssets(); }
+		catch (error) { ::BBCoop.log("The origin " + origin.getID() + " could not make a new company: " + error); }
+		if (roster.getSize() == 0)
+		{
+			// an origin that needs more than a running world: the plain company instead
+			try { ::Const.ScenarioManager.getScenario("scenario.early_access").onSpawnAssets(); }
+			catch (error) { ::BBCoop.log("Could not make a plain new company either: " + error); }
+		}
+		if (roster.getSize() == 0)
+		{
+			::BBCoop.notify("Could not make a new company (see log.html).");
+			this.WipeAsked = null;
+			return;
+		}
+		try { assets.updateFormation(); } catch (error) {}
+		try { assets.updateFood(); } catch (error) {}
+		try { assets.updateAverageMoodState(); } catch (error) {}
+		try { ::World.State.updateTopbarAssets(); } catch (error) {}
+		this.WipeAsked = null;
+		this.Ready = true;
+		this.Blocked = false;
+		this.LastSent = 0.0;
+		::BBCoop.notify(format("A new company: %i brothers and %i crowns. It replaces the old one in %s's save.", roster.getSize(), assets.getMoney(), this.joinedHost()));
+		this.send("new company");
+	}
+
+	// Vanilla's defeat screen; its button leads to the main menu. The host forgets our company.
+	function leaveAfterWipe()
+	{
+		local host = this.joinedHost();
+		this.Leaving = true;
+		this.Blocked = true;
+		this.WipeAsked = null;
+		if (host != null) ::BBCoop.Connection.sendMessage("company_drop", { to = host });
+		::BBCoop.log("Leaving " + host + "'s world after the wipe-out; our stored company is dropped.");
+		try { ::World.State.showGameFinishScreen(false); }
+		catch (error)
+		{
+			::BBCoop.log("Could not show the defeat screen: " + error);
+			try { ::World.State.exitGame(); } catch (e2) {}
+		}
+	}
+
+	// ---- the host reset our company (v0.43.0) ----
+
+	function onReset( _from, _payload )
+	{
+		if (this.joinedHost() == null)
+		{
+			// at the main menu or setting up the campaign: nothing of ours is restored any more
+			if (this.Restore != null && this.Restore.host == _from) this.Restore = null;
+			::BBCoop.notify(_from + " reset your company: you start with a new one in their world.");
+			return;
+		}
+		if (this.joinedHost() != _from || this.KickedBy != null) return;
+		this.Blocked = true;
+		this.KickedBy = _from;
+		::BBCoop.notify(_from + " reset your company and removed you from their world. Back to the main menu; join again through Multiplayer > Join a world to make a new company.");
+	}
+
+	function finishKick()
+	{
+		if (::BBCoop.Battle.isInTactical() || ::BBCoop.Battle.PendingRefs != null) return;
+		local who = this.KickedBy;
+		this.KickedBy = null;
+		::BBCoop.log("Leaving " + who + "'s world: they reset our company.");
+		try { ::BBCoop.Connection.stopSession(); } catch (error) {}
+		try { ::World.State.exitGame(); }
+		catch (error) { ::BBCoop.log("Could not leave the world: " + error); }
+	}
+
+	// Origin intro events tell the story of a company that was replaced by the stored one (and
+	// the default one reads the first three brothers, which a restored company need not have)
+	function skipsEvent( _id )
+	{
+		if (this.joinedHost() == null) return false;
+		return typeof _id == "string" && _id.find("scenario_intro") != null;
+	}
+
 	// ---- host ----
+
+	// Mod Options (hosting): drop a player's company and send them back to the main menu
+	function resetPlayer( _name )
+	{
+		local name = this.trim(_name);
+		if (name == "") return;
+		if (!::BBCoop.Connection.isHosting()) { ::BBCoop.notify("Only the host can reset a player's company."); return; }
+		if (!::MSU.Utils.hasState("world_state")) { ::BBCoop.notify("Load your co-op world first, then reset " + name + "'s company."); return; }
+		if (name == this.myName()) { ::BBCoop.notify("That is your own company."); return; }
+		local had = (name in this.Stored);
+		if (had)
+		{
+			delete this.Stored[name];
+			if (name in this.Announced) delete this.Announced[name];
+		}
+		::BBCoop.Connection.sendMessage("company_reset", { to = name });
+		::BBCoop.notify(format("%s's company %s. They go back to the main menu and start a new company when they join again.", name, had ? "was removed from your save" : "was not stored in this save"));
+	}
+
+	function trim( _text )
+	{
+		local text = "" + _text;
+		local a = 0, b = text.len();
+		while (a < b && (text[a] == ' ' || text[a] == '\t')) a++;
+		while (b > a && (text[b - 1] == ' ' || text[b - 1] == '\t')) b--;
+		return text.slice(a, b);
+	}
+
+	// A wiped-out player left: their next join starts a new company
+	function onDrop( _from, _payload )
+	{
+		if (!::MSU.Utils.hasState("world_state")) return;
+		if (!(_from in this.Stored)) return;
+		delete this.Stored[_from];
+		if (_from in this.Announced) delete this.Announced[_from];
+		::BBCoop.notify(_from + "'s company was wiped out and they left; they start a new company if they join again.");
+	}
 
 	function onSave( _from, _payload )
 	{
@@ -459,6 +656,9 @@
 		this.Blocked = false;
 		this.WaitStart = null;
 		this.LastSent = 0.0;
+		this.WipeAsked = null;
+		this.Leaving = false;
+		this.KickedBy = null;
 	}
 };
 
@@ -503,5 +703,59 @@
 		::BBCoop.Company.reset();
 		::BBCoop.Company.Restore = restore; // applied on the first update, once the company is placed
 		__original();
+	}
+});
+
+// Every brother dead in a joined world: the choice above instead of vanilla's defeat screen
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.showGameFinishScreen = @(__original) function( _gameWon )
+	{
+		if (!_gameWon)
+		{
+			try { if (::BBCoop.Company.interceptDefeat()) return; }
+			catch (error) { ::BBCoop.log("Wipe-out choice failed: " + error); }
+		}
+		__original(_gameWon);
+	}
+
+	// An event whose screen can't be built (the default origin's intro reads three brothers; a
+	// restored company had two) stayed queued and vanilla tried to show it every frame, playing
+	// the event sound each time. Such an event is dropped instead (v0.43.0).
+	q.showEventScreen = @(__original) function( _event, _isContract = false, _playSound = true )
+	{
+		try { return __original(_event, _isContract, _playSound); }
+		catch (error)
+		{
+			local id = "?";
+			try { id = _event.getID(); } catch (e2) {}
+			::BBCoop.log("Showing the event " + id + " failed: " + error + ". The event is dropped.");
+			if (!_isContract)
+			{
+				try
+				{
+					if (::World.Events.m.ActiveEvent != null) ::World.Events.m.ActiveEvent.clear();
+					::World.Events.m.ActiveEvent = null;
+					::World.Events.m.IsEventShown = false;
+				}
+				catch (e3) {}
+			}
+			return false;
+		}
+	}
+});
+
+::BBCoop.MH.hook("scripts/events/event_manager", function(q) {
+	q.fire = @(__original) function( _id, _update = true )
+	{
+		try
+		{
+			if (::BBCoop.Company.skipsEvent(_id))
+			{
+				::BBCoop.log("Skipped the origin's intro event " + _id + ": this company plays in a joined world.");
+				return false;
+			}
+		}
+		catch (error) {}
+		return __original(_id, _update);
 	}
 });

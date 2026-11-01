@@ -117,6 +117,18 @@ BBCoopConnection.prototype.start = function (_config)
 	});
 };
 
+// Leave the session: nothing is polled or sent until start() runs again (v0.43.0, the host reset
+// this player's company). The config stays so later sends fail quietly instead of complaining.
+BBCoopConnection.prototype.stop = function ()
+{
+	this.mSessionId++;
+	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
+	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
+	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
+	this.mSendQueue = [];
+	this.log('Left the co-op session');
+};
+
 BBCoopConnection.prototype.join = function (_session)
 {
 	var self = this;

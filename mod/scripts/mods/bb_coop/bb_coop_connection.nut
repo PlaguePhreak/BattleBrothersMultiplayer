@@ -237,6 +237,14 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
 		::BBCoop.Trade.onPromptChoice(_data.id, _data.choice);
 		::BBCoop.Contract.onPromptChoice(_data.id, _data.choice);
+		::BBCoop.Company.onPromptChoice(_data.id, _data.choice);
+	}
+
+	// Leave the relay session (the host reset our company): no more polling or sending until the
+	// next Multiplayer > Join
+	function stopSession()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("stop", null);
 	}
 
 	function openTradeWindow()
@@ -384,6 +392,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "company_refused":
 				::BBCoop.Company.onRefused(_msg.from, _msg.payload);
+				break;
+			case "company_drop":
+				::BBCoop.Company.onDrop(_msg.from, _msg.payload);
+				break;
+			case "company_reset":
+				::BBCoop.Company.onReset(_msg.from, _msg.payload);
 				break;
 			case "battle_loot":
 				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);
