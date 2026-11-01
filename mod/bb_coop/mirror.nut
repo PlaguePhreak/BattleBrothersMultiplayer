@@ -1432,7 +1432,22 @@
 				::BBCoop.Mirror.DeadIDs.push(this.getID());
 		}
 		catch (error) {}
-		return __original(_killer, _skill, _fatalityType, _silent);
+		local ret = __original(_killer, _skill, _fatalityType, _silent);
+		// host of a shared battle: a dead brother left in the turn bar later "gets a turn", the bar's
+		// UI can't find him and the battle freezes (seen when a friend's brother died)
+		if (!::BBCoop.Mirror.Active && ::BBCoop.Battle.HostBattleID != null && !this.isAlive())
+		{
+			try
+			{
+				if (::Tactical.TurnSequenceBar.getTurnsUntilActive(this.getID()) != null)
+				{
+					::Tactical.TurnSequenceBar.removeEntity(this);
+					::BBCoop.log("Took " + this.getName() + " off the turn bar");
+				}
+			}
+			catch (error) {}
+		}
+		return ret;
 	}
 });
 
