@@ -45,6 +45,7 @@
 
 		this.HostBattleID = ::BBCoop.getSetting("PlayerName") + "_" + ::Time.getRealTime();
 		this.Reinforcements.clear();
+		this.LateJoins.clear();
 		this.JoinedOwners.clear();
 		this.MirrorOwners.clear();
 		::BBCoop.Remote.reset();
@@ -150,13 +151,52 @@
 		this.GatherAnswered[_from] <- true;
 
 		local side = ("side" in _payload) && _payload.side == "enemy" ? "enemy" : "ally";
-		local spawned = this.spawnReinforcements(_from, _payload.bros, side);
-		// v0.18.0 joiners build a copy of our battlefield and watch it there
+		// joiners build a copy of our battlefield and watch it there
 		if (("mirror" in _payload) && _payload.mirror)
 		{
 			this.MirrorOwners[_from] <- { sent = {} };
 			if (!::BBCoop.Mirror.sendScene(_from)) delete this.MirrorOwners[_from];
 		}
+		// Aaron's rule: in the join window they line up with their side; after it they arrive at the
+		// map edge when the current round ends
+		if (!this.isGathering() && this.hasRoundStarted())
+		{
+			this.LateJoins.push({ owner = _from, bros = _payload.bros, side = side });
+			::BBCoop.notify(format("%s joins the battle%s at the end of this round.", _from, side == "enemy" ? " AGAINST you" : ""));
+			::BBCoop.log(_from + " joins at the end of the round");
+			local now = null;
+			try { now = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+			::BBCoop.Remote.sendView(_from, now);
+			return;
+		}
+		this.bringIn(_from, _payload.bros, side);
+	}
+
+	LateJoins = [],         // { owner, bros, side } waiting for the end of the round
+
+	function hasRoundStarted()
+	{
+		local round = 0;
+		try { round = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+		return round > 0;
+	}
+
+	// The end of a round (just before the next starts): late joiners arrive at the edge
+	function onRoundEnd()
+	{
+		if (this.HostBattleID == null || this.LateJoins.len() == 0) return;
+		local list = this.LateJoins;
+		this.LateJoins = [];
+		foreach (j in list)
+		{
+			try { this.bringIn(j.owner, j.bros, j.side); }
+			catch (error) { ::BBCoop.log("Could not bring in " + j.owner + "'s company: " + error); }
+		}
+	}
+
+	function bringIn( _from, _bros, side )
+	{
+		local spawned = this.spawnReinforcements(_from, _bros, side);
 		if (side == "enemy")
 			::BBCoop.notify(format("%s's company joins the battle AGAINST you (%i brothers)!", _from, spawned));
 		else
@@ -322,6 +362,7 @@
 		this.HostBattleID = null;
 		this.GatherUntil = 0.0;
 		this.FirstRoundHeld = false;
+		this.LateJoins.clear();
 		::BBCoop.Remote.reset();
 
 		local byOwner = {};
@@ -731,6 +772,11 @@
 		{
 			::BBCoop.Battle.FirstRoundHeld = true;
 			return;
+		}
+		// before the new round's turn order is made, so late joiners act in it
+		if (!copy)
+		{
+			try { ::BBCoop.Battle.onRoundEnd(); } catch (error) { ::BBCoop.log("Late joiners: " + error); }
 		}
 		local args = [this];
 		args.extend(vargv);
