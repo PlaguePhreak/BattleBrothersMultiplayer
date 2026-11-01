@@ -15,9 +15,9 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.21.0';
+const VERSION = '0.22.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 4;
+const PROTOCOL = 5;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
@@ -428,6 +428,13 @@ function botHear(msg) {
   } else if (msg.type === 'contract_join' && msg.payload && msg.payload.to === BOT_NAME && msg.payload.id === 'bot_1') {
     if (!msg.payload.join) { console.log(`Bot: ${msg.from} won't help with the test contract`); return; }
     console.log(`Bot: ${msg.from} helps with the test contract; paying their share in 10s, then a 15s caravan escort`);
+    // contract tracker (v0.22.0): the helper's top-right contract panel should show these lines
+    const track = (objective) => pushMessage(BOT_NAME, 'contract_track', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", helpers: 1, lists: [
+      { title: 'Objectives', fixed: true, items: [{ icon: 'ui/icons/money.png', text: objective }] },
+      { title: 'Payment', fixed: true, items: [{ icon: 'ui/icons/money.png', text: 'Receive [color=#135213]300[/color] Crowns on completion' }] },
+    ] });
+    setTimeout(() => track('Wait about ten seconds'), 500);
+    setTimeout(() => track('Escort the caravan for fifteen seconds'), 11000);
     setTimeout(() => pushMessage(BOT_NAME, 'contract_pay', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", crowns: 150, total: 300 }), 10000);
     // escort test: the bot's company walks off in a straight line as if tied to a caravan; the
     // helper's game should move their company along with it, and let go when the contract ends

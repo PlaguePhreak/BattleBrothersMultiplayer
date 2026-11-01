@@ -409,6 +409,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "contract_done":
 				::BBCoop.Contract.onDone(_msg.from, _msg.payload);
 				break;
+			case "contract_track":
+				::BBCoop.Contract.onTrack(_msg.from, _msg.payload);
+				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);
 				break;
