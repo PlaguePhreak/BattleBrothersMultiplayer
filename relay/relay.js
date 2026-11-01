@@ -15,9 +15,9 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.28.0';
+const VERSION = '0.30.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 5;
+const PROTOCOL = 6;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
