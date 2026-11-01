@@ -15,9 +15,9 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.33.0';
+const VERSION = '0.35.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 6;
+const PROTOCOL = 7;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
@@ -229,7 +229,7 @@ function activePlayers() {
 
 // World updates replace the sender's previous one, so the history doesn't fill up with
 // stale copies of the whole world
-const LATEST_ONLY = new Set(['world_full', 'world_parties', 'world_time']);
+const LATEST_ONLY = new Set(['world_full', 'world_parties', 'world_time', 'company_save', 'company_restore']);
 
 function pushMessage(from, type, payload) {
   const msg = { seq: ++seq, from, type, payload, time: Date.now() };

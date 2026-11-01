@@ -343,6 +343,16 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "session_request":
 				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
+				::BBCoop.Company.onSessionRequest(_msg.from, _msg.payload);
+				break;
+			case "company_save":
+				::BBCoop.Company.onSave(_msg.from, _msg.payload);
+				break;
+			case "company_request":
+				::BBCoop.Company.onRequest(_msg.from, _msg.payload);
+				break;
+			case "company_restore":
+				::BBCoop.Company.onRestore(_msg.from, _msg.payload);
 				break;
 			case "battle_loot":
 				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);

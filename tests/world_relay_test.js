@@ -105,6 +105,13 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   poll = await req('GET', '/poll?player=C&since=0');
   const times = poll.messages.filter((m) => m.type === 'world_time');
   check(times.length === 1 && times[0].payload.t === 101, 'only the newest world_time is kept');
+  // stored companies (v0.35.0): a joiner's newest copy replaces the older one; copies to different hosts stay
+  await send('B', 'company_save', { to: 'A', money: 100, bros: [{ name: 'x', raw: [], look: {} }] });
+  await send('B', 'company_save', { to: 'A', money: 250, bros: [{ name: 'x', raw: [], look: {} }] });
+  await send('C', 'company_save', { to: 'A', money: 5, bros: [{ name: 'y', raw: [], look: {} }] });
+  poll = await req('GET', '/poll?player=A&since=0');
+  const copies = poll.messages.filter((m) => m.type === 'company_save');
+  check(copies.length === 2 && copies.find((m) => m.from === 'B').payload.money === 250, 'only each player\'s newest company copy is kept');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });
