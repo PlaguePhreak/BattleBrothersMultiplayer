@@ -989,7 +989,8 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	this.mConfig.lastServerHost = _from;
 	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
-	this.showToast('Joining ' + _from + "'s world. Pick your origin; the map seed is set to theirs.");
+	if (typeof _info.cd === 'number' && typeof _info.ed === 'number') { window.BBCoopPendingJoin.cd = _info.cd; window.BBCoopPendingJoin.ed = _info.ed; }
+	this.showToast('Joining ' + _from + "'s campaign" + (_info.day ? ' (day ' + _info.day + ')' : '') + ". Pick your origin; the map, difficulty and day are set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
 };
 

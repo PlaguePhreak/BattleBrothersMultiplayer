@@ -161,6 +161,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/join.nut");
 ::include("bb_coop/loot.nut");
 ::include("bb_coop/world.nut");
+::include("bb_coop/time.nut");
 ::include("bb_coop/trade.nut");
 ::include("bb_coop/contract.nut");
 
