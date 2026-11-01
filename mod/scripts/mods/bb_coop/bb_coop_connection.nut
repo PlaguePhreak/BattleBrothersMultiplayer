@@ -335,6 +335,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "battle_start":
 				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
 				break;
+			case "battle_decline":
+				::BBCoop.Battle.onDecline(_msg.from, _msg.payload);
+				break;
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
 				break;
