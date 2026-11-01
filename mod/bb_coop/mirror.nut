@@ -737,6 +737,13 @@
 
 	}
 
+	function hasMoveFor( _id )
+	{
+		foreach (m in this.Moves)
+			if (m.id == _id) return true;
+		return false;
+	}
+
 	function updateMoves( _now )
 	{
 		if (this.Moves.len() == 0 || _now < this.NextMoveTime) return;
@@ -1047,7 +1054,9 @@
 		}
 		this.updateStrip(matched);
 		// our brother's turn: the map takes clicks (onMouse), whether or not the bar shows him
-		if (this.isOurTurn() && target != null && !this.Busy && this.Moves.len() == 0)
+		// (only our own brother's pending move holds the input: another unit the copy can't place
+		// used to keep the input locked for the whole turn)
+		if (this.isOurTurn() && target != null && !this.Busy && !this.hasMoveFor(targetID))
 			_state.setInputLocked(false);
 	}
 

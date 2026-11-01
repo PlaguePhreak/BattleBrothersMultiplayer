@@ -46,6 +46,7 @@
 	{
 		if (_e == null || !_e.isAlive()) return false;
 		if (this.getOwner(_e) == null) return false;
+		if (::BBCoop.Mirror.Active || this.getOwner(_e) == ::BBCoop.getSetting("PlayerName")) return false; // our own brother, in a copy
 		if (_e.getID() == this.TookOverID) return false;
 		if (_e.getMoraleState() == ::Const.MoraleState.Fleeing) return false; // vanilla AI runs fleeing brothers
 		local owner = this.getOwner(_e);
