@@ -89,7 +89,17 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   await sleep(11000);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   const pay = poll.messages.find((m) => m.type === 'contract_pay' && m.payload.to === 'B');
-  check(pay && pay.payload.crowns === 150 && poll.messages.some((m) => m.type === 'contract_done' && m.payload.to === 'B'), 'bot pays the helper and ends its contract');
+  check(pay && pay.payload.crowns === 150, 'bot pays the helper');
+  // then it escorts a caravan for 15s (tests/escort_test.js) and ends the contract
+  await sleep(17000);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'contract_done' && m.payload.to === 'B'), 'bot ends its contract after the escort');
+  // shared clock: only the host's newest world_time is kept
+  await send('A', 'world_time', { t: 100, sp: 1, f: [] });
+  await send('A', 'world_time', { t: 101, sp: 1, f: ['B'] });
+  poll = await req('GET', '/poll?player=C&since=0');
+  const times = poll.messages.filter((m) => m.type === 'world_time');
+  check(times.length === 1 && times[0].payload.t === 101, 'only the newest world_time is kept');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });

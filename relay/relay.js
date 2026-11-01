@@ -15,9 +15,9 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.17.0';
+const VERSION = '0.20.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 2;
+const PROTOCOL = 4;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
@@ -229,7 +229,7 @@ function activePlayers() {
 
 // World updates replace the sender's previous one, so the history doesn't fill up with
 // stale copies of the whole world
-const LATEST_ONLY = new Set(['world_full', 'world_parties']);
+const LATEST_ONLY = new Set(['world_full', 'world_parties', 'world_time']);
 
 function pushMessage(from, type, payload) {
   const msg = { seq: ++seq, from, type, payload, time: Date.now() };
@@ -244,7 +244,7 @@ function pushMessage(from, type, payload) {
   if (messages.length > MAX_MESSAGES) messages.shift();
   if (type === 'world_full' && payload) {
     console.log(`[${new Date().toISOString()}] ${from}: world_full (${(payload.parties || []).length} parties, ${(payload.locations || []).length} locations, day ${payload.day})`);
-  } else if (type !== 'pos' && type !== 'world_parties') {
+  } else if (type !== 'pos' && type !== 'world_parties' && type !== 'world_time' && type !== 'busy') {
     let text = JSON.stringify(payload);
     if (text.length > 300) text = text.slice(0, 300) + `... (${text.length} chars)`;
     console.log(`[${new Date().toISOString()}] ${from}: ${type} ${text}`);
@@ -258,7 +258,7 @@ function pushMessage(from, type, payload) {
 const BOT_NAME = 'Bot';
 // Join the bot's clan (Ctrl+K in game) and it fights on your side; otherwise it joins against you
 const BOT_CLAN = 'Bot Clan';
-const bot = { target: null, seed: '', angle: 0 };
+const bot = { target: null, seed: '', angle: 0, following: null };
 
 // The bot remembers the last world it saw, so it can act as a host for the Multiplayer
 // join test: play a campaign once, then use Multiplayer from the main menu.
@@ -292,6 +292,8 @@ const playerPos = new Map();    // player -> { x, y } from their position update
 const botOffers = new Set();     // trade offers the bot sent that wait for an answer
 const botAmbushed = new Map();  // party id -> time the bot last made it attack
 const botContractAsked = new Set(); // clanmates the bot already shared its test contract with
+const botHelping = new Map();       // player -> contract id the bot helps them with
+let botEscort = null;                // { to, until, x, y } while the bot "escorts a caravan" itself
 let botWorldSent = 0, botPartiesSent = 0;
 function botWorldMessage(msg) {
   const p = msg.payload || {};
@@ -381,6 +383,13 @@ function botHear(msg) {
       setTimeout(() => pushMessage(BOT_NAME, 'contract_share', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", employer: 'Botsford', objectives: ['Wait about ten seconds.'], dest: '' }), 3000);
       console.log(`Bot: ${msg.from} is in ${BOT_CLAN}; sharing a test contract`);
     }
+    // escorts (v0.19.0): a player the bot helps is tied to a caravan; the bot rides along
+    const escort = typeof msg.payload.escort === 'string' ? msg.payload.escort : '';
+    const following = escort !== '' && botHelping.get(msg.from) === escort;
+    if (following !== (bot.following === msg.from)) {
+      bot.following = following ? msg.from : null;
+      console.log(following ? `Bot: travelling with ${msg.from}'s caravan` : `Bot: ${msg.from}'s escort is over`);
+    }
     bot.target = { x: msg.payload.x, y: msg.payload.y };
     bot.seed = msg.payload.seed || '';
     rememberWorld(msg.payload);
@@ -408,16 +417,29 @@ function botHear(msg) {
     console.log(`Bot: ${msg.from} ${msg.payload.accepted ? 'accepted' : 'declined'} the bot's gift`);
   } else if (msg.type === 'contract_share' && msg.payload && msg.payload.to === BOT_NAME) {
     console.log(`Bot: ${msg.from} shares the contract "${msg.payload.title}"; helping`);
+    botHelping.set(msg.from, msg.payload.id);
     setTimeout(() => pushMessage(BOT_NAME, 'contract_join', { to: msg.from, id: msg.payload.id, join: true }), 2000);
   } else if (msg.type === 'contract_pay' && msg.payload && msg.payload.to === BOT_NAME) {
     console.log(`Bot: ${msg.from} paid the bot ${msg.payload.crowns} of ${msg.payload.total} crowns for "${msg.payload.title}"`);
   } else if (msg.type === 'contract_done' && msg.payload && msg.payload.to === BOT_NAME) {
     console.log(`Bot: ${msg.from}'s contract "${msg.payload.title}" ${msg.payload.cancelled ? 'was broken' : 'is finished'}`);
+    if (botHelping.get(msg.from) === msg.payload.id) botHelping.delete(msg.from);
+    if (bot.following === msg.from) bot.following = null;
   } else if (msg.type === 'contract_join' && msg.payload && msg.payload.to === BOT_NAME && msg.payload.id === 'bot_1') {
     if (!msg.payload.join) { console.log(`Bot: ${msg.from} won't help with the test contract`); return; }
-    console.log(`Bot: ${msg.from} helps with the test contract; paying their share in 10s`);
+    console.log(`Bot: ${msg.from} helps with the test contract; paying their share in 10s, then a 15s caravan escort`);
     setTimeout(() => pushMessage(BOT_NAME, 'contract_pay', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", crowns: 150, total: 300 }), 10000);
-    setTimeout(() => pushMessage(BOT_NAME, 'contract_done', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", cancelled: false }), 10500);
+    // escort test: the bot's company walks off in a straight line as if tied to a caravan; the
+    // helper's game should move their company along with it, and let go when the contract ends
+    setTimeout(() => {
+      const start = playerPos.get(msg.from) || bot.target || { x: 0, y: 0 };
+      botEscort = { to: msg.from, until: Date.now() + 15000, x: start.x + 60, y: start.y };
+      console.log(`Bot: escorting a caravan for 15s; ${msg.from}'s company should travel with it`);
+    }, 11000);
+    setTimeout(() => {
+      botEscort = null;
+      pushMessage(BOT_NAME, 'contract_done', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", cancelled: false });
+    }, 27000);
   } else if (msg.type === 'battle_start' && msg.payload) {
     // join with the company the host's game rolled for the bot
     const bros = (msg.payload.company || []).map((b, i) => ({ key: `bot_${i}`, name: `Bot's ${b.name}`, raw: b.raw, look: b.look }));
@@ -516,11 +538,19 @@ function botTick() {
     if (Date.now() - botAliveSent > 5000) { botAliveSent = Date.now(); pushMessage(BOT_NAME, 'alive', {}); }
     return;
   }
-  bot.angle += 0.15;
-  const r = 250;
+  let x, y, escort = '';
+  if (botEscort && Date.now() < botEscort.until) {
+    botEscort.x += 12; // the caravan walks east
+    x = botEscort.x; y = botEscort.y; escort = 'bot_1';
+  } else {
+    // circle the player's company, close by while travelling with their caravan
+    bot.angle += 0.15;
+    const r = bot.following ? 45 : 250;
+    x = bot.target.x + Math.cos(bot.angle) * r;
+    y = bot.target.y + Math.sin(bot.angle) * r;
+  }
   pushMessage(BOT_NAME, 'pos', {
-    x: bot.target.x + Math.cos(bot.angle) * r,
-    y: bot.target.y + Math.sin(bot.angle) * r,
+    x, y, escort,
     seed: bot.seed,
     strength: 120, // so the host's enemies go after the bot's company too
     clan: BOT_CLAN,

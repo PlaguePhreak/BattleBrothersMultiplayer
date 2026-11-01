@@ -1,0 +1,975 @@
+// Shared battles, part 3 (v0.18.0): the real battlefield for players who join someone else's battle.
+// The host's game still runs the battle. Our game builds a copy ("mirror") of it in a real tactical
+// scene: the same map (generated from the same seed and terrain), the same units (brothers are sent
+// whole, other fighters as script + gear + looks), and every view the host sends moves them, sets
+// their hitpoints and armor and removes the dead. Nothing in the copy acts on its own: no AI, no turn
+// logic, no combat end. When it's one of our brothers' turn, the copy's turn bar is moved to him so
+// the normal skill bar works; clicks on the map become orders for the host instead of actions here.
+// If any of that can't be set up, the old battle panel takes over.
+// Checked against the decompiled vanilla tactical_state (init, initMap, updateCurrentEntity,
+// executeEntityTravel, executeEntitySkill, exitTactical), world_state (startScriptedCombat,
+// loading_screen_onScreenShown, onCombatFinished), tactical_entity_manager (spawn, checkCombatFinished),
+// actor, item_container and armor/helmet.
+
+::BBCoop.Mirror <- {
+	// ---- host side ----
+	MapSetup = null,        // how our map was made, sent to joiners: seed, terrain, location, tile
+	LogLines = [],          // combat log lines of this battle ({ ex, text })
+	LogIndex = {},          // owner -> how many log lines they have
+	DeadIDs = [],           // entity ids killed in this battle (anything else that vanished retreated)
+	LogMax = 400,
+
+	// ---- joiner side ----
+	Scene = null,           // battle_scene from the host, waiting for the tactical map
+	Active = false,         // we are in a mirrored battle
+	Host = null,
+	BattleID = null,
+	View = null,            // newest battle_view
+	NewView = false,
+	SpawnData = {},         // host entity id -> spawn blob (sent once per unit)
+	Units = {},             // host entity id -> WeakTableRef to our copy
+	Created = [],           // WeakTableRefs to brothers we put in the temporary roster
+	Moves = [],             // { id, x, y, tries }
+	NextMoveTime = 0.0,
+	Advancing = false,      // we are moving the turn bar ourselves
+	Killing = false,        // we are removing a unit ourselves
+	Logging = false,        // we are writing a line from the host's log
+	CycleFor = null,        // host entity id we are moving the turn bar to
+	CycleTries = 0,
+	LastCycle = 0.0,
+	Busy = false,           // an order is on its way, wait for the next view
+	BusySince = 0.0,
+	Fallback = false,       // the old battle panel handles our turns
+	Leaving = false,
+	Result = null,          // battle_result kept until we are back on the world map
+	StartTime = 0.0,
+	Needed = {},            // ids we already asked the host to send again
+	MapMismatchNoted = false,
+
+	AISprites = [
+		"body", "head", "injury", "injury_body", "tattoo_body", "scar_body", "tattoo_head", "scar_head",
+		"hair", "beard", "beard_top", "legs_back", "legs_front", "miniboss",
+		"permanent_injury_1", "permanent_injury_2", "permanent_injury_3", "permanent_injury_4"
+	],
+
+	function isEnabled()
+	{
+		try { return ::BBCoop.getSetting("RealBattleView"); } catch (error) {}
+		return true;
+	}
+
+	// ======================= host =======================
+
+	function plainCopy( _table )
+	{
+		if (_table == null) return null;
+		local ret = {};
+		foreach (k, v in _table)
+		{
+			local t = typeof v;
+			if (t == "integer" || t == "float" || t == "bool" || t == "string" || t == "null")
+				ret[k] <- v;
+			else if (t == "array")
+			{
+				local ok = true;
+				foreach (x in v)
+				{
+					local tx = typeof x;
+					if (tx != "integer" && tx != "float" && tx != "bool" && tx != "string" && tx != "null") { ok = false; break; }
+				}
+				if (ok) ret[k] <- clone v;
+			}
+		}
+		return ret;
+	}
+
+	// Called right before vanilla generates the host's map: fix the random seed so joiners can
+	// generate the very same map
+	function seedHostMap( _state )
+	{
+		this.MapSetup = null;
+		this.LogLines.clear();
+		this.LogIndex.clear();
+		this.DeadIDs.clear();
+		if (_state.isScenarioMode()) return;
+		local p = _state.m.StrategicProperties;
+		if (p == null || p.Tile == null) return;
+
+		local seed = 0;
+		if (p.LocationTemplate != null && p.MapSeed != 0) seed = p.MapSeed; // vanilla seeds with this itself
+		else
+		{
+			seed = ::Math.rand(1, 999999999);
+			::Math.seedRandom(seed);
+		}
+		local pos = null;
+		try
+		{
+			local v = ::World.State.getPlayer().getPos();
+			pos = { x = v.X, y = v.Y };
+		}
+		catch (error) {}
+		this.MapSetup = {
+			seed = seed,
+			terrain = p.TerrainTemplate,
+			location = this.plainCopy(p.LocationTemplate),
+			tile = { x = p.Tile.Coords.X, y = p.Tile.Coords.Y },
+			pos = pos,
+			fog = p.IsFogOfWarVisible,
+			hash = 0
+		};
+	}
+
+	function afterHostMap()
+	{
+		if (this.MapSetup != null) this.MapSetup.hash = this.mapHash();
+	}
+
+	// Short fingerprint of the generated map, to check both games made the same one
+	function mapHash()
+	{
+		local size = ::Tactical.getMapSize();
+		local h = size.X * 131 + size.Y;
+		for (local y = 0; y < size.Y; y++)
+		{
+			for (local x = 0; x < size.X; x++)
+			{
+				local c = 1;
+				if (::Tactical.isValidTileSquare(x, y))
+				{
+					local t = ::Tactical.getTileSquare(x, y);
+					c = ::BBCoop.Remote.terrainChar(t)[0] + ::Math.max(0, ::Math.min(9, t.Level)) * 7;
+				}
+				h = (h * 31 + c) % 1000003;
+			}
+		}
+		return h;
+	}
+
+	function sendScene( _owner )
+	{
+		if (this.MapSetup == null)
+		{
+			::BBCoop.log("No map setup to send to " + _owner + ", they get the battle panel");
+			return false;
+		}
+		::BBCoop.Connection.sendMessage("battle_scene", { to = _owner, battleID = ::BBCoop.Battle.HostBattleID, setup = this.MapSetup });
+		return true;
+	}
+
+	function onLogLine( _text, _ex )
+	{
+		if (::BBCoop.Battle.HostBattleID == null || ::BBCoop.Battle.MirrorOwners.len() == 0) return;
+		if (typeof _text != "string") return;
+		this.LogLines.push({ ex = _ex, text = _text });
+		if (this.LogLines.len() > this.LogMax)
+		{
+			// keep indices meaningful: drop the oldest and shift everyone's position
+			this.LogLines.remove(0);
+			foreach (owner, i in this.LogIndex) this.LogIndex[owner] = ::Math.max(0, i - 1);
+		}
+	}
+
+	function takeLogFor( _owner )
+	{
+		local from = _owner in this.LogIndex ? this.LogIndex[_owner] : 0;
+		local ret = [];
+		for (local i = from; i < this.LogLines.len(); i++) ret.push(this.LogLines[i]);
+		this.LogIndex[_owner] <- this.LogLines.len();
+		return ret;
+	}
+
+	function serializeWith( _fn )
+	{
+		local sd = ::MSU.Class.SerializationData();
+		_fn(sd.getSerializationEmulator());
+		local raw = [];
+		foreach (d in sd.getDataArray()) raw.push([d.getType(), d.getData()]);
+		return raw;
+	}
+
+	function scriptOf( _e )
+	{
+		try
+		{
+			local troop = _e.getWorldTroop();
+			if (troop != null && ("Script" in troop) && troop.Script != "") return troop.Script;
+		}
+		catch (error) {}
+		try { return ::IO.scriptFilenameByHash(_e.ClassNameHash); } catch (error) {}
+		return null;
+	}
+
+	// Everything the joiner needs to make a copy of this unit (sent once per unit)
+	function describeSpawn( _e, _side )
+	{
+		local faction = ::Const.Faction.Player;
+		if (_side == "enemy")
+		{
+			faction = _e.getFaction();
+			if (faction == ::Const.Faction.Player || faction == ::Const.Faction.PlayerAnimals) faction = ::Const.Faction.Bandits;
+		}
+		local d = { name = _e.getName(), faction = faction, player = false };
+		if (::isKindOf(_e, "player"))
+		{
+			d.player = true;
+			d.raw <- ::BBCoop.Roster.serializeBrother(_e);
+			d.look <- ::BBCoop.Roster.captureAppearance(_e);
+			return d;
+		}
+		d.script <- this.scriptOf(_e);
+		if (d.script == null) return null;
+		local items = _e.getItems();
+		d.items <- this.serializeWith(function( _out ) { items.onSerialize(_out); });
+		d.look <- this.captureLook(_e);
+		return d;
+	}
+
+	function captureLook( _e )
+	{
+		local ret = {};
+		foreach (name in this.AISprites)
+		{
+			if (!_e.hasSprite(name)) continue;
+			local s = _e.getSprite(name);
+			local entry = { brush = s.HasBrush ? s.getBrush().Name : "", visible = s.Visible, color = null };
+			try { entry.color = ::BBCoop.Roster.colorToHex(s.Color); } catch (error) {}
+			ret[name] <- entry;
+		}
+		return ret;
+	}
+
+	function armorOf( _e, _slot )
+	{
+		try
+		{
+			local item = _e.getItems().getItemAtSlot(_slot);
+			if (item != null && "getArmor" in item) return item.getArmor();
+		}
+		catch (error) {}
+		return -1;
+	}
+
+	// Extra unit fields for players who see the real battlefield
+	function addMirrorFields( _unit, _e, _owner )
+	{
+		_unit.id <- _e.getID();
+		_unit.ap <- _e.getActionPoints();
+		_unit.fat <- _e.getFatigue();
+		_unit.morale <- _e.getMoraleState();
+		_unit.ah <- this.armorOf(_e, ::Const.ItemSlot.Head);
+		_unit.ab <- this.armorOf(_e, ::Const.ItemSlot.Body);
+		local info = ::BBCoop.Battle.MirrorOwners[_owner];
+		if (!(_e.getID() in info.sent))
+		{
+			local spawn = null;
+			try { spawn = this.describeSpawn(_e, _unit.side); }
+			catch (error) { ::BBCoop.log("Could not describe " + _e.getName() + " for " + _owner + ": " + error); }
+			if (spawn != null)
+			{
+				spawn.faction = spawn.faction.tointeger();
+				_unit.spawn <- spawn;
+				info.sent[_e.getID()] <- true;
+			}
+		}
+	}
+
+	function onNeed( _from, _payload )
+	{
+		if (!(_from in ::BBCoop.Battle.MirrorOwners) || _payload.battleID != ::BBCoop.Battle.HostBattleID) return;
+		local sent = ::BBCoop.Battle.MirrorOwners[_from].sent;
+		foreach (id in _payload.ids)
+			if (id in sent) delete sent[id];
+		local active = null;
+		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+		::BBCoop.Remote.sendView(_from, active);
+	}
+
+	// ======================= joiner =======================
+
+	function onScene( _from, _payload )
+	{
+		local battle = ::BBCoop.Battle;
+		if (!this.isEnabled() || this.Active || this.Scene != null) return;
+		if (battle.PendingRefs == null || _from != battle.PendingHost || _payload.battleID != battle.PendingBattleID) return;
+		if (battle.isInTactical()) return;
+
+		local setup = _payload.setup;
+		local properties = null;
+		try
+		{
+			properties = ::Const.Tactical.CombatInfo.getClone();
+			properties.TerrainTemplate = setup.terrain;
+			properties.Tile = this.findWorldTile(setup);
+			if (properties.Tile == null) throw "world tile not found";
+			if (setup.location != null)
+			{
+				properties.LocationTemplate = setup.location;
+				properties.IsAttackingLocation = true;
+			}
+			properties.MapSeed = setup.seed.tointeger();
+			properties.CombatID = "BBCoopMirror";
+			properties.IsUsingSetPlayers = true;
+			properties.Players = [];
+			properties.IsFleeingProhibited = true;
+			properties.IsLootingProhibited = true;
+			properties.IsFogOfWarVisible = setup.fog;
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not set up the real battlefield (" + error + "), using the battle panel");
+			return;
+		}
+
+		this.Scene = _payload;
+		this.Host = _from;
+		this.BattleID = _payload.battleID;
+		this.Fallback = false;
+		this.Leaving = false;
+		this.Result = null;
+		this.SpawnData.clear();
+		this.Needed.clear();
+		this.MapMismatchNoted = false;
+		// views that came before the scene still carry spawn data
+		if (this.View != null && this.View.battleID == this.BattleID) this.collectSpawns(this.View);
+		::BBCoop.Connection.setBattleMirror(true, false);
+		::BBCoop.log("Building " + _from + "'s battlefield (" + setup.terrain + ", seed " + setup.seed + ")");
+		try
+		{
+			::World.State.startScriptedCombat(properties, false, false, false);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Starting the real battlefield failed: " + error);
+			this.Scene = null;
+			::BBCoop.Connection.setBattleMirror(false, false);
+		}
+	}
+
+	function findWorldTile( _setup )
+	{
+		local tile = null;
+		if (_setup.pos != null)
+		{
+			try
+			{
+				tile = ::World.getTile(::World.worldToTile(::createVec(_setup.pos.x, _setup.pos.y)));
+				if (tile.Coords.X == _setup.tile.x && tile.Coords.Y == _setup.tile.y) return tile;
+			}
+			catch (error) {}
+		}
+		// the host fought on a tile next to its company: look around
+		try
+		{
+			local center = ::World.State.getPlayer().getTile();
+			if (center.Coords.X == _setup.tile.x && center.Coords.Y == _setup.tile.y) return center;
+			if (tile != null)
+			{
+				for (local i = 0; i < 6; i++)
+				{
+					if (!tile.hasNextTile(i)) continue;
+					local next = tile.getNextTile(i);
+					if (next.Coords.X == _setup.tile.x && next.Coords.Y == _setup.tile.y) return next;
+				}
+			}
+		}
+		catch (error) {}
+		if (tile != null) ::BBCoop.log("Using a nearby world tile for the battlefield, the map may differ");
+		return tile;
+	}
+
+	// The joiner's views (also used by the battle panel)
+	function onView( _from, _payload )
+	{
+		local battle = ::BBCoop.Battle;
+		if (battle.PendingRefs == null || _from != battle.PendingHost || _payload.battleID != battle.PendingBattleID) return;
+		this.normalize(_payload);
+		this.View = _payload;
+		this.NewView = true;
+		this.Busy = false;
+		this.collectSpawns(_payload);
+	}
+
+	// Numbers can arrive as floats from the JS side: tables keys and array indices need integers
+	function toInt( _v )
+	{
+		return _v == null ? null : _v.tointeger();
+	}
+
+	function normalize( _view )
+	{
+		if ("activeID" in _view) _view.activeID = this.toInt(_view.activeID);
+		if ("dead" in _view)
+		{
+			local dead = [];
+			foreach (id in _view.dead) dead.push(id.tointeger());
+			_view.dead = dead;
+		}
+		foreach (u in _view.units)
+		{
+			foreach (k in ["x", "y", "hp", "id", "ap", "fat", "morale", "ah", "ab"])
+				if (k in u) u[k] = this.toInt(u[k]);
+		}
+	}
+
+	function collectSpawns( _view )
+	{
+		foreach (u in _view.units)
+		{
+			if (("spawn" in u) && ("id" in u) && u.spawn != null)
+			{
+				this.SpawnData[u.id] <- u.spawn;
+				if (u.id in this.Needed) delete this.Needed[u.id];
+			}
+		}
+	}
+
+	function onOrderError( _payload )
+	{
+		if (!this.Active) return;
+		this.Busy = false;
+		::BBCoop.notify(_payload.text);
+	}
+
+	function isMirrorState( _state )
+	{
+		return this.Scene != null && !_state.isScenarioMode() && _state.m.StrategicProperties != null && _state.m.StrategicProperties.CombatID == "BBCoopMirror";
+	}
+
+	// tactical_state.initMap, before vanilla: same seed as the host
+	function beforeInitMap( _state )
+	{
+		if (!this.isMirrorState(_state)) return false;
+		::Math.seedRandom(this.Scene.setup.seed.tointeger());
+		return true;
+	}
+
+	// tactical_state.initMap, after vanilla: the map exists, bring in the units
+	function afterInitMap( _state )
+	{
+		this.Active = true;
+		this.StartTime = ::Time.getRealTimeF();
+		this.Units.clear();
+		this.Created.clear();
+		this.Moves.clear();
+		this.CycleFor = null;
+		this.Busy = false;
+		local hash = this.mapHash();
+		if (hash != this.Scene.setup.hash.tointeger())
+		{
+			this.MapMismatchNoted = true;
+			::BBCoop.log(format("Our copy of the map differs from %s's (%i vs %i)", this.Host, hash, this.Scene.setup.hash));
+		}
+		if (this.View != null && this.View.battleID == this.BattleID) this.applyView(this.View, true);
+		this.NewView = false;
+	}
+
+	function getUnit( _id )
+	{
+		if (_id == null || !(_id in this.Units)) return null;
+		local ref = this.Units[_id];
+		if (ref == null || ref.isNull()) return null;
+		local e = ref.get();
+		return e.isAlive() ? e : null;
+	}
+
+	function freeTile( _x, _y )
+	{
+		if (!::Tactical.isValidTileSquare(_x, _y)) return null;
+		local tile = ::Tactical.getTileSquare(_x, _y);
+		if (tile.IsOccupiedByActor) return null;
+		if (!tile.IsEmpty)
+		{
+			// a tree or rock where the host has none: our map came out different, clear the spot
+			try { tile.removeObject(); } catch (error) {}
+			if (!tile.IsEmpty) return null;
+		}
+		return tile;
+	}
+
+	function spawnUnit( _u, _d )
+	{
+		local tile = this.freeTile(_u.x, _u.y);
+		if (tile == null)
+		{
+			::BBCoop.log("No room for " + _d.name + " at " + _u.x + "," + _u.y);
+			return null;
+		}
+		local e = null;
+		if (_d.player)
+		{
+			e = ::World.getTemporaryRoster().create("scripts/entity/tactical/player");
+			this.Created.push(::WeakTableRef(e));
+			::BBCoop.Roster.deserializeInto(e, _d.raw);
+			::BBCoop.Roster.applyAppearance(e, _d.look);
+			e.setName(_d.name);
+			e.setGuest(true);
+			e.setFaction(_d.faction.tointeger());
+			::Tactical.addEntityToMap(e, tile.Coords.X, tile.Coords.Y);
+			try { e.onCombatStart(); } catch (error) {}
+		}
+		else
+		{
+			e = ::Tactical.spawnEntity(_d.script, tile.Coords.X, tile.Coords.Y);
+			e.setFaction(_d.faction.tointeger());
+			try
+			{
+				local overflow = ::World.Assets.getOverflowItems();
+				local before = overflow.len();
+				e.getItems().clear();
+				e.getItems().onDeserialize(::BBCoop.Roster.makeReader(_d.items));
+				if (overflow.len() > before) overflow.resize(before); // gear that didn't fit is not ours to keep
+			}
+			catch (error)
+			{
+				::BBCoop.log("Could not dress " + _d.name + ": " + error);
+			}
+			::BBCoop.Roster.applyAppearance(e, _d.look, false);
+			e.setName(_d.name);
+		}
+		e.getFlags().set("BBCoopMirrorID", _u.id);
+		this.Units[_u.id] <- ::WeakTableRef(e);
+		return e;
+	}
+
+	function setArmor( _e, _slot, _value )
+	{
+		if (_value < 0) return false;
+		local item = _e.getItems().getItemAtSlot(_slot);
+		if (item == null || !("setArmor" in item) || item.getArmor() == _value) return false;
+		item.setArmor(_value);
+		return true;
+	}
+
+	function syncUnit( _e, _u )
+	{
+		local changed = false;
+		if (_e.getHitpoints() != _u.hp)
+		{
+			local hurt = _u.hp < _e.getHitpoints();
+			_e.setHitpoints(::Math.max(1, _u.hp));
+			if (hurt)
+			{
+				try { _e.playSound(::Const.Sound.ActorEvent.DamageReceived, ::Const.Sound.Volume.Actor); } catch (error) {}
+			}
+			changed = true;
+		}
+		local armor = false;
+		try
+		{
+			if (this.setArmor(_e, ::Const.ItemSlot.Head, _u.ah)) armor = true;
+			if (this.setArmor(_e, ::Const.ItemSlot.Body, _u.ab)) armor = true;
+		}
+		catch (error) {}
+		if (armor)
+		{
+			try { _e.getSkills().update(); } catch (error) {}
+			changed = true;
+		}
+		if (_e.getActionPoints() != _u.ap) { _e.setActionPoints(_u.ap); changed = true; }
+		if (_e.getFatigue() != _u.fat) { _e.setFatigue(_u.fat); changed = true; }
+		if (_e.getMoraleState() != _u.morale)
+		{
+			try { _e.setMoraleState(_u.morale); } catch (error) {}
+			changed = true;
+		}
+		if (changed)
+		{
+			try { _e.setDirty(true); } catch (error) {}
+		}
+
+		local tile = _e.getTile();
+		if (tile.SquareCoords.X != _u.x || tile.SquareCoords.Y != _u.y)
+			this.Moves.push({ id = _u.id, x = _u.x, y = _u.y, tries = 0 });
+	}
+
+	// Gone from the host's battle: dead (corpse) or retreated (just gone)
+	function removeUnit( _e, _dead )
+	{
+		this.Killing = true;
+		try
+		{
+			if (_dead) _e.kill(null, null, ::Const.FatalityType.None, false);
+			else
+			{
+				_e.m.IsTurnDone = true;
+				_e.m.IsAlive = false;
+				_e.die();
+			}
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not remove " + _e.getName() + ": " + error);
+			try { _e.kill(null, null, ::Const.FatalityType.None, true); } catch (e2) {}
+		}
+		this.Killing = false;
+	}
+
+	function applyView( _view, _initial )
+	{
+		this.Moves.clear();
+		local seen = {};
+		local need = [];
+		foreach (u in _view.units)
+		{
+			if (!("id" in u)) continue; // an older host
+			seen[u.id] <- true;
+			local e = this.getUnit(u.id);
+			if (e == null && (u.id in this.Units)) continue; // already dead here
+			if (e == null)
+			{
+				if (!(u.id in this.SpawnData))
+				{
+					if (!(u.id in this.Needed)) { this.Needed[u.id] <- true; need.push(u.id); }
+					continue;
+				}
+				try { e = this.spawnUnit(u, this.SpawnData[u.id]); }
+				catch (error) { ::BBCoop.log("Could not copy " + this.SpawnData[u.id].name + ": " + error); }
+				if (e == null) continue;
+			}
+			try { this.syncUnit(e, u); }
+			catch (error) { ::BBCoop.log("Could not update " + e.getName() + ": " + error); }
+		}
+
+		local dead = {};
+		if ("dead" in _view) foreach (id in _view.dead) dead[id] <- true;
+		foreach (id, ref in this.Units)
+		{
+			if (id in seen || ref == null || ref.isNull()) continue;
+			local e = ref.get();
+			if (e.isAlive()) this.removeUnit(e, id in dead);
+		}
+
+		if ("log" in _view)
+		{
+			this.Logging = true;
+			foreach (line in _view.log)
+			{
+				try
+				{
+					if (line.ex) ::Tactical.EventLog.logEx(line.text);
+					else ::Tactical.EventLog.log(line.text);
+				}
+				catch (error) {}
+			}
+			this.Logging = false;
+		}
+
+		if (need.len() != 0)
+			::BBCoop.Connection.sendMessage("battle_mirror_need", { to = this.Host, battleID = this.BattleID, ids = need });
+
+		if (_view.turn != null && this.Fallback)
+			::BBCoop.Connection.setBattleMirror(true, true);
+	}
+
+	function updateMoves( _now )
+	{
+		if (this.Moves.len() == 0 || _now < this.NextMoveTime) return;
+		local m = this.Moves.remove(0);
+		local e = this.getUnit(m.id);
+		if (e == null) return;
+		local now = e.getTile();
+		if (now.SquareCoords.X == m.x && now.SquareCoords.Y == m.y) return;
+		local tile = this.freeTile(m.x, m.y);
+		if (tile == null)
+		{
+			// someone still stands there (they move later in this batch): try again shortly
+			if (++m.tries < 20) this.Moves.push(m);
+			return;
+		}
+		::Tactical.getNavigator().teleport(e, tile, null, null, true);
+		this.NextMoveTime = _now + 0.25;
+	}
+
+	function isOurTurn()
+	{
+		return this.View != null && this.View.turn != null && !this.Fallback;
+	}
+
+	// Every frame in the mirrored battle, instead of vanilla's turn handling
+	function update( _state )
+	{
+		local now = ::Time.getRealTimeF();
+		_state.setInputLocked(true);
+
+		if (this.Leaving)
+		{
+			this.Leaving = false;
+			::BBCoop.log("Leaving the copy of " + this.Host + "'s battle");
+			_state.exitTactical();
+			return;
+		}
+		if (_state.m.IsBattleEnded) return;
+
+		// our brothers are home already (result applied, or released): nothing left to watch
+		if (::BBCoop.Battle.PendingRefs == null && this.Result == null)
+		{
+			this.Leaving = true;
+			return;
+		}
+
+		if (!::BBCoop.isOnline(this.Host, ::BBCoop.Battle.HostTimeout))
+		{
+			::BBCoop.Battle.releaseAway("Lost contact with " + this.Host + " during the battle.");
+			return;
+		}
+
+		// no unit got a turn yet: vanilla only hides the loading screen once someone does
+		if (now - this.StartTime > 5.0)
+		{
+			try { if (::LoadingScreen.isVisible() && !::LoadingScreen.isAnimating()) ::LoadingScreen.hide(); } catch (error) {}
+		}
+
+		if (this.NewView)
+		{
+			this.NewView = false;
+			this.applyView(this.View, false);
+		}
+		if (this.Busy && now - this.BusySince > 10.0) this.Busy = false;
+
+		local nav = ::Tactical.getNavigator();
+		this.updateMoves(now);
+
+		// keep the turn bar on whoever has the turn in the host's battle
+		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
+		local targetID = this.View != null && ("activeID" in this.View) ? this.View.activeID : null;
+		local target = this.getUnit(targetID);
+		if (target != null && (active == null || active.getID() != target.getID()))
+		{
+			if (this.CycleFor != targetID) { this.CycleFor = targetID; this.CycleTries = 0; }
+			local limit = this.Units.len() * 2 + 4;
+			if (this.CycleTries < limit)
+			{
+				if (now - this.LastCycle > 0.1 && (active == null || !nav.isTravelling(active)))
+				{
+					this.LastCycle = now;
+					this.CycleTries++;
+					this.Advancing = true;
+					try { ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) { ::BBCoop.log("Turn bar: " + error); }
+					this.Advancing = false;
+				}
+			}
+			else if (this.isOurTurn())
+			{
+				::BBCoop.log("Could not bring " + target.getName() + " up in the turn bar, using the battle panel for this battle");
+				this.Fallback = true;
+				::BBCoop.Connection.setBattleMirror(true, true);
+			}
+			return;
+		}
+
+		if (active != null)
+		{
+			try { active.onUpdate(); } catch (error) {}
+		}
+		if (this.isOurTurn() && target != null && active != null && !this.Busy && this.Moves.len() == 0)
+			_state.setInputLocked(false);
+	}
+
+	function sendOrder( _order )
+	{
+		if (!this.isOurTurn()) return false;
+		_order.to <- this.Host;
+		_order.battleID <- this.BattleID;
+		_order.key <- this.View.turn.key;
+		this.Busy = true;
+		this.BusySince = ::Time.getRealTimeF();
+		::BBCoop.Connection.sendMessage("battle_order", _order);
+		return true;
+	}
+
+	// tactical_state.executeEntitySkill in the copy: the host uses the skill
+	function onSkill( _state, _entity, _tile )
+	{
+		local skill = _entity.getSkills().getSkillByID(_state.m.SelectedSkillID);
+		if (skill == null || _tile == null) return;
+		if (skill.isTargeted() && _state.wasInCameraMovementMode()) return;
+		local ok = true;
+		try { ok = skill.isUsableOn(_tile); } catch (error) {}
+		if (!ok)
+		{
+			::Cursor.setCursor(::Const.UI.Cursor.Denied);
+			return;
+		}
+		this.sendOrder({ action = "skill", skill = skill.getID(), x = _tile.SquareCoords.X, y = _tile.SquareCoords.Y });
+		::Tactical.TurnSequenceBar.deselectActiveSkill();
+		::Tactical.getHighlighter().clear();
+		_state.m.CurrentActionState = null;
+		_state.m.SelectedSkillID = null;
+		::Cursor.setCursor(::Const.UI.Cursor.Hourglass);
+	}
+
+	// tactical_state.executeEntityTravel in the copy, second click on the same tile: the host moves him
+	function onTravel( _state, _entity, _tile )
+	{
+		this.sendOrder({ action = "move", x = _tile.SquareCoords.X, y = _tile.SquareCoords.Y });
+		::Tactical.getNavigator().clearPath();
+		::Tactical.getNavigator().clearVisualisation();
+		::Tactical.getHighlighter().clear();
+		_state.m.CurrentActionState = null;
+		::Cursor.setCursor(::Const.UI.Cursor.Hourglass);
+	}
+
+	// End turn / wait in the copy (buttons or keys)
+	function onEndTurn()
+	{
+		if (this.isOurTurn() && !this.Busy) this.sendOrder({ action = "end" });
+	}
+
+	function onWait()
+	{
+		if (this.isOurTurn() && !this.Busy) this.sendOrder({ action = "wait" });
+	}
+
+	function leave()
+	{
+		if (this.Active || this.Scene != null) this.Leaving = true;
+	}
+
+	// tactical_state.onFinish
+	function onTacticalFinish()
+	{
+		if (!this.Active && this.Scene == null) return;
+		this.Active = false;
+		this.Scene = null;
+		this.Units.clear();
+		this.Moves.clear();
+		foreach (ref in this.Created)
+		{
+			if (ref == null || ref.isNull()) continue;
+			try { ::World.getTemporaryRoster().remove(ref.get()); } catch (error) {}
+		}
+		this.Created.clear();
+		this.SpawnData.clear();
+		this.View = null;
+		::BBCoop.Connection.setBattleMirror(false, false);
+	}
+
+	// world_state.onCombatFinished: back on the world map, the stored result can be applied
+	function onBackInWorld()
+	{
+		if (this.Result == null) return;
+		local r = this.Result;
+		this.Result = null;
+		::BBCoop.Battle.onBattleResult(r.from, r.payload);
+	}
+
+	// battle_result while we watch the copy: keep it for the world map
+	function keepResult( _from, _payload )
+	{
+		if (!this.Active && this.Scene == null) return false;
+		this.Result = { from = _from, payload = _payload };
+		this.leave();
+		return true;
+	}
+};
+
+::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
+	q.executeEntitySkill = @(__original) function( _activeEntity, _targetTile )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_activeEntity, _targetTile);
+		try { ::BBCoop.Mirror.onSkill(this, _activeEntity, _targetTile); }
+		catch (error) { ::BBCoop.log("Mirror skill failed: " + error); }
+	}
+
+	q.executeEntityTravel = @(__original) function( _activeEntity, _mouseEvent )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_activeEntity, _mouseEvent);
+		try
+		{
+			if (this.wasInCameraMovementMode()) return;
+			local tile = ::Tactical.getTile(::Tactical.screenToTile(_mouseEvent.getX(), _mouseEvent.getY()));
+			if (::Tactical.getNavigator().HasValidPath && this.m.LastTileSelected != null && this.m.LastTileSelected.X == tile.X && this.m.LastTileSelected.Y == tile.Y)
+			{
+				::BBCoop.Mirror.onTravel(this, _activeEntity, tile);
+				return;
+			}
+		}
+		catch (error) { ::BBCoop.log("Mirror move failed: " + error); }
+		return __original(_activeEntity, _mouseEvent);
+	}
+
+	q.onProcessAI = @(__original) function()
+	{
+		if (::BBCoop.Mirror.Active) return;
+		return __original();
+	}
+});
+
+::BBCoop.MH.hook("scripts/entity/tactical/tactical_entity_manager", function(q) {
+	// the copy never ends on its own: the host's battle decides
+	q.checkCombatFinished = @(__original) function( _forceFinish = false )
+	{
+		if (::BBCoop.Mirror.Active) return;
+		return __original(_forceFinish);
+	}
+});
+
+::BBCoop.MH.hook("scripts/entity/tactical/actor", function(q) {
+	q.kill = @(__original) function( _killer = null, _skill = null, _fatalityType = ::Const.FatalityType.None, _silent = false )
+	{
+		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Killing) return; // only the host's battle kills
+		try
+		{
+			if (::BBCoop.Battle.HostBattleID != null && ::BBCoop.Battle.MirrorOwners.len() != 0 && this.isAlive())
+				::BBCoop.Mirror.DeadIDs.push(this.getID());
+		}
+		catch (error) {}
+		return __original(_killer, _skill, _fatalityType, _silent);
+	}
+});
+
+::BBCoop.MH.hook("scripts/ui/screens/tactical/modules/turn_sequence_bar/turn_sequence_bar", function(q) {
+	q.initNextTurn = @(__original) function( ... )
+	{
+		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
+		{
+			try { ::BBCoop.Mirror.onEndTurn(); } catch (error) {}
+			return;
+		}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
+	}
+
+	q.entityWaitTurn = @(__original) function( _entity )
+	{
+		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
+		{
+			try { ::BBCoop.Mirror.onWait(); } catch (error) {}
+			return true;
+		}
+		return __original(_entity);
+	}
+});
+
+::BBCoop.MH.hook("scripts/ui/screens/tactical/modules/topbar/tactical_screen_topbar_event_log", function(q) {
+	q.log = @(__original) function( ... )
+	{
+		local text = vargv.len() != 0 ? vargv[0] : null;
+		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Logging) return; // the host's log is the one that counts
+		try { ::BBCoop.Mirror.onLogLine(text, false); } catch (error) {}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
+	}
+
+	q.logEx = @(__original) function( ... )
+	{
+		local text = vargv.len() != 0 ? vargv[0] : null;
+		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Logging) return;
+		try { ::BBCoop.Mirror.onLogLine(text, true); } catch (error) {}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
+	}
+});
+
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.onCombatFinished = @(__original) function()
+	{
+		__original();
+		try { ::BBCoop.Mirror.onBackInWorld(); }
+		catch (error) { ::BBCoop.log("Applying the battle result failed: " + error); }
+	}
+});

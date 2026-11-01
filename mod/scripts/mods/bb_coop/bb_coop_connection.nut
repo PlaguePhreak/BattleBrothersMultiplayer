@@ -179,6 +179,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	// The real battlefield (mirror.nut) is up: the battle panel only shows when it can't be used
+	function setBattleMirror( _on, _fallback )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setBattleMirror", { on = _on, fallback = _fallback });
+	}
+
 	function closeBattlePanel()
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("closeBattlePanel", null);
@@ -267,6 +273,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	// JS polls this about once a second; returns null when not on the world map
 	function getWorldPosition()
 	{
+		try { ::BBCoop.Time.tick(); } catch (error) { ::BBCoop.log("Time sync failed: " + error); }
 		if (!::MSU.Utils.hasState("world_state")) return null;
 		try
 		{
@@ -284,7 +291,8 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				seed = ::BBCoop.Ghosts.getSeed(),
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
-				bodyBrush = brushes.bodyBrush
+				bodyBrush = brushes.bodyBrush,
+				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
 		catch (error)
@@ -328,11 +336,29 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "battle_result":
 				::BBCoop.Battle.onBattleResult(_msg.from, _msg.payload);
 				break;
+			case "battle_scene":
+				::BBCoop.Mirror.onScene(_msg.from, _msg.payload);
+				break;
+			case "battle_view":
+				::BBCoop.Mirror.onView(_msg.from, _msg.payload);
+				break;
+			case "battle_order_error":
+				::BBCoop.Mirror.onOrderError(_msg.payload);
+				break;
+			case "battle_mirror_need":
+				::BBCoop.Mirror.onNeed(_msg.from, _msg.payload);
+				break;
 			case "hello":
 				::BBCoop.notify(_msg.from + " says: " + _msg.payload.text);
 				break;
 			case "world_full":
 				::BBCoop.World.onFull(_msg.from, _msg.payload);
+				break;
+			case "world_time":
+				::BBCoop.Time.onTime(_msg.from, _msg.payload);
+				break;
+			case "busy":
+				::BBCoop.Time.onBusy(_msg.from, _msg.payload);
 				break;
 			case "world_parties":
 				::BBCoop.World.onParties(_msg.from, _msg.payload);

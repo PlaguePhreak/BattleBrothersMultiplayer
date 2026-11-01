@@ -66,7 +66,7 @@
 		return ret;
 	}
 
-	function applyAppearance( _bro, _appearance )
+	function applyAppearance( _bro, _appearance, _isHuman = true )
 	{
 		foreach (name, entry in _appearance)
 		{
@@ -78,7 +78,7 @@
 				else sprite.resetBrush();
 				sprite.Visible = entry.visible;
 				// Skin came out grey when the read-back saturation was copied, so use the normal value
-				if (name == "head" || name == "body") sprite.Saturation = 1.0;
+				if (_isHuman && (name == "head" || name == "body")) sprite.Saturation = 1.0;
 				if (entry.color != null) sprite.Color = ::createColor(entry.color);
 			}
 			catch (error)
@@ -126,6 +126,12 @@
 	// Writes the data into a brother that was just created (not yet set up)
 	function deserializeInto( _bro, _raw )
 	{
+		_bro.onDeserialize(this.makeReader(_raw));
+	}
+
+	// A reader over data written by the serialization emulator (sent as [type, value] pairs)
+	function makeReader( _raw )
+	{
 		local sd = ::MSU.Class.SerializationData();
 		foreach (pair in _raw)
 		{
@@ -136,7 +142,7 @@
 		}
 		// The emulator's metadata reports the current save format version, which is the format
 		// the sender just wrote in. (Using the loaded save's metadata could report an older version.)
-		_bro.onDeserialize(sd.getDeserializationEmulator());
+		return sd.getDeserializationEmulator();
 	}
 
 	// The brothers that would fight: not in reserve, in formation order

@@ -8,6 +8,10 @@
 //   owner  -> "contract_done"  -> helper     (finished or broken)
 // Payments are found by watching asset_manager.addMoney while a contract screen option runs
 // (contract.processInput), which is where every vanilla contract pays out.
+// Escorts (v0.19.0): while the owner's company is tied to a caravan (vanilla escort contracts
+// call world_state.setEscortedEntity and move the player onto the caravan every frame), the
+// owner's "pos" updates carry escort = contract id. Each helper of that contract is then moved
+// along next to the owner's company the same way: no own orders, no camping, no provisions used.
 // Checked against vanilla contract.nut, contract_manager.nut and asset_manager.nut.
 
 ::BBCoop.Contract <- {
@@ -16,6 +20,9 @@
 	NextPrompt = 0,
 	Capture = null,      // crowns paid while a shared contract's option runs, or null
 	PendingDone = [],    // contract_done messages held until the payment went out
+	Escorts = {},        // player -> { id, pos, time } while their company travels with a caravan
+	Following = null,    // owner whose caravan we are moved with, or null
+	EscortRadius = 45.0, // how far from the owner's company a helper rides
 
 	function keysOf( _table )
 	{
@@ -41,6 +48,10 @@
 	function onPosition( _from, _payload )
 	{
 		if ("clan" in _payload) this.Clans[_from] <- _payload.clan;
+		if (("escort" in _payload) && typeof _payload.escort == "string" && _payload.escort != "")
+			this.Escorts[_from] <- { id = _payload.escort, pos = ::createVec(_payload.x.tofloat(), _payload.y.tofloat()), time = ::Time.getRealTimeF() };
+		else if (_from in this.Escorts)
+			delete this.Escorts[_from];
 	}
 
 	function getOnlineClanmates()
@@ -203,6 +214,18 @@
 		if (this.Capture == null) this.flushDone();
 	}
 
+	// Our shared contract's id while our company is tied to its caravan, else "" (sent in "pos")
+	function getEscortID()
+	{
+		local contract = this.getActive();
+		if (contract == null || this.getHelpers(contract).len() == 0) return "";
+		if (this.Following != null) return ""; // being moved along by someone else's caravan
+		local e = null;
+		try { e = ::World.State.getEscortedEntity(); } catch (error) { return ""; }
+		if (e == null || e.isNull() || !e.isAlive()) return "";
+		return this.getContractID(contract);
+	}
+
 	// ---- helper ----
 
 	function getHelping()
@@ -265,10 +288,115 @@
 			local h = this.getHelping();
 			if (h != null && (h.owner != offer.from || h.id != offer.payload.id))
 				::BBCoop.Connection.sendMessage("contract_leave", { to = h.owner, id = h.id });
+			if (this.Following != null) this.stopFollowing();
 			this.setHelping(offer.from, offer.payload.id, offer.payload.title);
 			::BBCoop.notify("You are helping " + offer.from + " with " + offer.payload.title + ". Fight their contract battles with them (Ctrl+B joins a nearby battle).");
 		}
 		::BBCoop.Connection.sendMessage("contract_join", { to = offer.from, id = offer.payload.id, join = join });
+	}
+
+	// Where the owner's company is now: their ghost (smoothly moved) or their last update
+	function getEscortPos( _owner )
+	{
+		if (_owner in ::BBCoop.Ghosts.Entries)
+		{
+			local e = ::BBCoop.Ghosts.Entries[_owner];
+			if (e.Party != null && !e.Party.isNull()) return e.Party.getPos();
+		}
+		return this.Escorts[_owner].pos;
+	}
+
+	// Each helper rides at their own spot around the owner's company, so they don't stack up
+	function getEscortOffset()
+	{
+		local spots = [[1.0, 0.0], [0.5, 0.87], [-0.5, 0.87], [-1.0, 0.0], [-0.5, -0.87], [0.5, -0.87], [0.0, 1.0]];
+		local name = ::BBCoop.getSetting("PlayerName");
+		local sum = 0;
+		foreach (c in name) sum += c;
+		local spot = spots[sum % spots.len()];
+		return ::createVec(spot[0] * this.EscortRadius, spot[1] * this.EscortRadius);
+	}
+
+	// The owner we help is escorting a caravan right now (heard from in the last minute;
+	// in battle their game only sends heartbeats, so the last caravan position is kept)
+	function getEscortOwner()
+	{
+		local h = this.getHelping();
+		if (h == null || !(h.owner in this.Escorts)) return null;
+		local e = this.Escorts[h.owner];
+		if (e.id != h.id || !::BBCoop.isOnline(h.owner, 60.0)) return null;
+		return h.owner;
+	}
+
+	function startFollowing( _owner )
+	{
+		local state = ::World.State;
+		local player = state.getPlayer();
+		if (::World.Assets.isCamping()) state.onCamp();
+		player.setDestination(null);
+		player.setPath(null);
+		// escorting the own company blocks orders the way vanilla escorts do; it is always alive
+		state.setEscortedEntity(player);
+		state.setCampingAllowed(false);
+		::World.Assets.setUseProvisions(false);
+		state.updateTopBarButtonState();
+		this.Following = _owner;
+		::BBCoop.notify("You travel with " + _owner + "'s caravan until the escort is over. Join their battles when the caravan is attacked.");
+	}
+
+	function stopFollowing( _quiet = false )
+	{
+		local owner = this.Following;
+		this.Following = null;
+		try
+		{
+			local state = ::World.State;
+			local e = state.getEscortedEntity();
+			// our own contract may have started an escort of its own meanwhile: leave that alone
+			if (e != null && !e.isNull() && e.getID() == state.getPlayer().getID())
+			{
+				state.setEscortedEntity(null);
+				state.setCampingAllowed(true);
+				::World.Assets.setUseProvisions(true);
+				state.resetSpeedToNormal();
+				state.updateTopBarButtonState();
+			}
+		}
+		catch (error) { ::BBCoop.log("Could not end the caravan escort: " + error); }
+		if (!_quiet && owner != null) ::BBCoop.notify("You no longer travel with " + owner + "'s caravan.");
+	}
+
+	// Called every frame from world_state.onUpdate
+	function updateEscort()
+	{
+		if (!::BBCoop.Ghosts.isWorldActive() || ::BBCoop.Battle.isInTactical()) return;
+		local owner = this.getEscortOwner();
+		if (owner == null || (this.Following != null && owner != this.Following))
+		{
+			if (this.Following != null) this.stopFollowing();
+			return;
+		}
+		local state = ::World.State;
+		if (this.Following == null)
+		{
+			local e = state.getEscortedEntity();
+			if (e != null && !e.isNull() && e.isAlive()) return; // escorting a caravan of our own
+			if (state.m.MenuStack.hasBacksteps() || state.getCurrentTown() != null) return; // wait until out of town or a menu
+			this.startFollowing(owner);
+		}
+		else
+		{
+			local e = state.getEscortedEntity();
+			if (e == null || e.isNull() || e.getID() != state.getPlayer().getID())
+			{
+				this.Following = null; // something else (our own contract) took over
+				return;
+			}
+		}
+		local pos = this.getEscortPos(owner);
+		local offset = this.getEscortOffset();
+		state.getPlayer().setPos(::createVec(pos.X + offset.X, pos.Y + offset.Y));
+		::World.getCamera().moveTo(state.getPlayer());
 	}
 
 	function onPay( _from, _payload )
@@ -285,6 +413,8 @@
 		local h = this.getHelping();
 		if (h == null || h.owner != _from || h.id != _payload.id) return;
 		this.setHelping("", "", "");
+		if (_from in this.Escorts) delete this.Escorts[_from];
+		if (this.Following != null) this.stopFollowing(true);
 		if ("gone" in _payload) ::BBCoop.notify(_from + " no longer has that contract.");
 		else if (_payload.cancelled) ::BBCoop.notify(_from + " broke the contract " + _payload.title + ".");
 		else ::BBCoop.notify(_from + " finished the contract " + _payload.title + ". Thanks for the help!");
@@ -344,5 +474,49 @@
 	{
 		if (::BBCoop.Contract.Capture != null && _f > 0) ::BBCoop.Contract.Capture += _f;
 		return __original(_f);
+	}
+});
+
+// Helpers are moved along with the owner's caravan
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.onUpdate = @(__original) function()
+	{
+		__original();
+		try { ::BBCoop.Contract.updateEscort(); }
+		catch (error)
+		{
+			::BBCoop.log("Caravan escort update failed: " + error);
+			::BBCoop.Contract.stopFollowing(true);
+		}
+	}
+
+	// a save made while travelling with a caravan must not keep provisions or camping switched off
+	q.onBeforeSerialize = @(__original) function( _out )
+	{
+		local following = ::BBCoop.Contract.Following != null;
+		if (following)
+		{
+			this.setCampingAllowed(true);
+			::World.Assets.setUseProvisions(true);
+		}
+		__original(_out);
+		if (following)
+		{
+			this.setCampingAllowed(false);
+			::World.Assets.setUseProvisions(false);
+		}
+	}
+
+	q.onFinish = @(__original) function()
+	{
+		::BBCoop.Contract.Following = null;
+		::BBCoop.Contract.Escorts.clear();
+		__original();
+	}
+
+	q.loadCampaign = @(__original) function( _campaignFileName )
+	{
+		::BBCoop.Contract.Following = null; // loading resets the escort (vanilla onDeserialize)
+		__original(_campaignFileName);
 	}
 });

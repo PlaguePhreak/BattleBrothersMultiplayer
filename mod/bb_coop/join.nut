@@ -23,7 +23,10 @@
 			return;
 		}
 		local pos = player.getPos();
-		::BBCoop.Connection.sendMessage("session_info", { to = _from, seed = seed, x = pos.X, y = pos.Y, dlcs = ::BBCoop.getDLCs() });
+		local info = { to = _from, seed = seed, x = pos.X, y = pos.Y, dlcs = ::BBCoop.getDLCs(), day = ::World.getTime().Days };
+		// the joiner plays our campaign: same combat and economic difficulty
+		try { info.cd <- ::World.Assets.getCombatDifficulty(); info.ed <- ::World.Assets.getEconomicDifficulty(); } catch (error) {}
+		::BBCoop.Connection.sendMessage("session_info", info);
 		::BBCoop.notify(_from + " is joining your world.");
 	}
 
@@ -86,8 +89,21 @@
 			::BBCoop.notify("The map seed was changed, so your company starts on its own map instead of next to " + info.host + ".");
 			return;
 		}
-		// from now on this world follows the host's (world.nut)
+		// from now on this world follows the host's: parties and camps (world.nut), day and hour (time.nut)
 		::World.Flags.set("BBCoopHost", info.host);
+		::BBCoop.Time.reset();
+		if (("cd" in info) && info.cd != null)
+		{
+			try
+			{
+				::World.Assets.m.CombatDifficulty = info.cd;
+				::World.Assets.m.EconomicDifficulty = info.ed;
+			}
+			catch (error)
+			{
+				::BBCoop.log("Could not copy the host's difficulty: " + error);
+			}
+		}
 		local tile = this.findSpawnTile(info.x, info.y);
 		if (tile == null)
 		{
