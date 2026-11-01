@@ -8,7 +8,7 @@
 //   owner  -> "contract_done"  -> helper     (finished or broken)
 // Payments are found by watching asset_manager.addMoney while a contract screen option runs
 // (contract.processInput), which is where every vanilla contract pays out.
-// Escorts (v0.18.0): while the owner's company is tied to a caravan (vanilla escort contracts
+// Escorts (v0.19.0): while the owner's company is tied to a caravan (vanilla escort contracts
 // call world_state.setEscortedEntity and move the player onto the caravan every frame), the
 // owner's "pos" updates carry escort = contract id. Each helper of that contract is then moved
 // along next to the owner's company the same way: no own orders, no camping, no provisions used.

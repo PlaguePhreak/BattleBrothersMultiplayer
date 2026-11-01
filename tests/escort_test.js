@@ -1,4 +1,4 @@
-// Caravan escorts with the relay bot (v0.18.0): when a player the bot helps is tied to a caravan
+// Caravan escorts with the relay bot (v0.19.0): when a player the bot helps is tied to a caravan
 // ("pos" carries escort = contract id) the bot rides close by, and the bot's own test contract
 // walks its company off with escort = 'bot_1' so a helper's game can be checked moving along.
 // Usage: node tests/escort_test.js   (exits non-zero on failure, takes about 15s).

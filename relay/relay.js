@@ -15,7 +15,7 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.18.0';
+const VERSION = '0.19.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
 const PROTOCOL = 2;
 const MAX_PLAYERS = 8;
@@ -383,7 +383,7 @@ function botHear(msg) {
       setTimeout(() => pushMessage(BOT_NAME, 'contract_share', { to: msg.from, id: 'bot_1', title: "The Bot's Test Contract", employer: 'Botsford', objectives: ['Wait about ten seconds.'], dest: '' }), 3000);
       console.log(`Bot: ${msg.from} is in ${BOT_CLAN}; sharing a test contract`);
     }
-    // escorts (v0.18.0): a player the bot helps is tied to a caravan; the bot rides along
+    // escorts (v0.19.0): a player the bot helps is tied to a caravan; the bot rides along
     const escort = typeof msg.payload.escort === 'string' ? msg.payload.escort : '';
     const following = escort !== '' && botHelping.get(msg.from) === escort;
     if (following !== (bot.following === msg.from)) {
