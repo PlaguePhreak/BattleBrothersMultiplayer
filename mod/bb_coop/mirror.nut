@@ -332,6 +332,26 @@
 	}
 
 	// Extra unit fields for players who see the real battlefield
+	// Reload skill of a crossbow or handgonne copy, after vanilla shoot_bolt.onUse / reload_bolt
+	function syncReloadSkill( _e, _weapon, _loaded )
+	{
+		local skills = _e.getSkills();
+		local script = null, id = null;
+		if (skills.hasSkill("actives.shoot_bolt")) { script = "scripts/skills/actives/reload_bolt"; id = "actives.reload_bolt"; }
+		else if (skills.hasSkill("actives.fire_handgonne")) { script = "scripts/skills/actives/reload_handgonne_skill"; id = "actives.reload_handgonne"; }
+		if (script == null) return;
+		if (_loaded)
+		{
+			if (skills.hasSkill(id)) skills.removeByID(id);
+			return;
+		}
+		if (skills.hasSkill(id)) return;
+		local reload = ::new(script);
+		reload.setItem(_weapon);
+		try { reload.setFatigueCost(::Math.max(0, reload.getFatigueCostRaw() + _weapon.m.FatigueOnSkillUse)); } catch (error) {}
+		skills.add(reload);
+	}
+
 	function addMirrorFields( _unit, _e, _owner )
 	{
 		_unit.id <- _e.getID();
@@ -692,6 +712,10 @@
 				{
 					if ("setLoaded" in w) w.setLoaded(_u.ld);
 					else w.m.IsLoaded = _u.ld;
+					// vanilla keeps the Reload skill only while the weapon is empty: the shot adds it, the
+					// reload removes itself (shoot_bolt.onUse / fire_handgonne). Do the same here, or the
+					// copy's brother has no Reload button until he re-equips the weapon (v0.43.3).
+					this.syncReloadSkill(_e, w, _u.ld);
 					try { _e.getSkills().update(); } catch (e2) {}
 					changed = true;
 				}
