@@ -432,6 +432,8 @@
 				if (id != ::BBCoop.Remote.TookOverID) ::BBCoop.Remote.TookOverID = null;
 				::BBCoop.Remote.onTurnChange(e);
 			}
+			try { ::BBCoop.Mirror.hostTick(e); }
+			catch (error) { ::BBCoop.log("Mirror sync failed: " + error); }
 		}
 
 		local remote = false;

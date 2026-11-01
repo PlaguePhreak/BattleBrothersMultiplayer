@@ -185,6 +185,22 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		if (this.isConnected()) this.m.JSHandle.asyncCall("setBattleMirror", { on = _on, fallback = _fallback });
 	}
 
+	// Our turn in the real battlefield while its turn bar shows someone else: the action strip
+	function setMirrorTurn( _data )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setMirrorTurn", _data);
+	}
+
+	function mirrorSkill( _id )
+	{
+		::BBCoop.Mirror.onStripSkill(_id);
+	}
+
+	function mirrorOrder( _action )
+	{
+		::BBCoop.Mirror.onStripOrder(_action);
+	}
+
 	function closeBattlePanel()
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("closeBattlePanel", null);
