@@ -18,6 +18,10 @@
 	LogIndex = {},          // owner -> how many log lines they have
 	DeadIDs = [],           // entity ids killed in this battle (anything else that vanished retreated)
 	LogMax = 400,
+	Acts = [],              // host: skill uses this battle ({ id, skill, x, y }), for joiners' animations
+	ActIndex = {},          // owner -> how many acts they have
+	ActQueue = [],          // copy: acts still to play
+	NextActTime = 0.0,
 
 	// ---- joiner side ----
 	Scene = null,           // battle_scene from the host, waiting for the tactical map
@@ -39,7 +43,9 @@
 	LastCycle = 0.0,
 	Busy = false,           // an order is on its way, wait for the next view
 	BusySince = 0.0,
-	Fallback = false,       // the old battle panel handles our turns
+	LastActiveID = null,    // turn bar's active entity when we last moved it
+	StripKey = null,        // what the action strip shows now (sent to the UI only on change)
+	ViewSeq = 0,
 	Leaving = false,
 	Result = null,          // battle_result kept until we are back on the world map
 	StartTime = 0.0,
@@ -90,7 +96,10 @@
 		this.MapSetup = null;
 		this.LogLines.clear();
 		this.LogIndex.clear();
+		this.Acts.clear();
+		this.ActIndex.clear();
 		this.DeadIDs.clear();
+		this.LastFingerprint = 0;
 		if (_state.isScenarioMode()) return;
 		local p = _state.m.StrategicProperties;
 		if (p == null || p.Tile == null) return;
@@ -168,6 +177,78 @@
 			this.LogLines.remove(0);
 			foreach (owner, i in this.LogIndex) this.LogIndex[owner] = ::Math.max(0, i - 1);
 		}
+	}
+
+	// Host: a unit used a skill (attack, shot, buff...). Joiners' copies replay it as an animation.
+	function onSkillUsed( _skill, _tile )
+	{
+		if (::BBCoop.Battle.HostBattleID == null || ::BBCoop.Battle.MirrorOwners.len() == 0 || _tile == null) return;
+		local user = _skill.getContainer().getActor();
+		if (user == null || !user.isPlacedOnMap()) return;
+		this.Acts.push({ id = user.getID(), skill = _skill.getID(), x = _tile.SquareCoords.X, y = _tile.SquareCoords.Y });
+		if (this.Acts.len() > this.LogMax)
+		{
+			this.Acts.remove(0);
+			foreach (owner, i in this.ActIndex) this.ActIndex[owner] = ::Math.max(0, i - 1);
+		}
+	}
+
+	function takeActsFor( _owner )
+	{
+		local from = _owner in this.ActIndex ? this.ActIndex[_owner] : 0;
+		local ret = [];
+		for (local i = from; i < this.Acts.len(); i++) ret.push(this.Acts[i]);
+		this.ActIndex[_owner] <- this.Acts.len();
+		return ret;
+	}
+
+	// Copy: play one act: the skill's sound, a shot flying for ranged skills, the user lunging and
+	// whoever stands on the target tile flinching. Nothing is changed: hitpoints come with the view.
+	function playAct( _act )
+	{
+		local user = this.getUnit(_act.id);
+		if (user == null || !user.isAlive() || !user.isPlacedOnMap()) return;
+		if (!::Tactical.isValidTileSquare(_act.x, _act.y)) return;
+		local tile = ::Tactical.getTileSquare(_act.x, _act.y);
+		local skill = null;
+		try { skill = user.getSkills().getSkillByID(_act.skill); } catch (error) {}
+		if (skill != null)
+		{
+			try
+			{
+				if (skill.m.SoundOnUse.len() != 0)
+					::Sound.play(skill.m.SoundOnUse[::Math.rand(0, skill.m.SoundOnUse.len() - 1)], ::Const.Sound.Volume.Skill, user.getPos());
+			}
+			catch (error) {}
+			try
+			{
+				local type = skill.getProjectileType();
+				if (type != ::Const.ProjectileType.None && !tile.isSameTileAs(user.getTile()))
+				{
+					local flip = tile.SquareCoords.X < user.getTile().SquareCoords.X;
+					::Tactical.spawnProjectileEffect(::Const.ProjectileSprite[type], user.getTile(), tile, 1.0, 1.0, true, flip);
+				}
+			}
+			catch (error) {}
+		}
+		if (tile.isSameTileAs(user.getTile())) return;
+		try { ::Tactical.getShaker().shake(user, tile, 2); } catch (error) {}
+		if (!tile.IsEmpty && tile.IsOccupiedByActor)
+		{
+			try { ::Tactical.getShaker().shake(tile.getEntity(), user.getTile(), 3); } catch (error) {}
+		}
+	}
+
+	function updateActs( _now )
+	{
+		if (this.ActQueue.len() == 0 || _now < this.NextActTime) return;
+		local act = this.ActQueue[0];
+		local user = this.getUnit(act.id);
+		// let a unit finish walking there first (but don't wait forever)
+		if (user != null && ::Tactical.getNavigator().isTravelling(user) && _now - act.queued < 3.0) return;
+		this.ActQueue.remove(0);
+		try { this.playAct(act); } catch (error) {}
+		this.NextActTime = _now + 0.6;
 	}
 
 	function takeLogFor( _owner )
@@ -274,6 +355,29 @@
 		}
 	}
 
+	// Host, every frame: when units moved or got hurt, send the players watching a copy a fresh
+	// view (at most twice a second), so their copy follows each action, not only turn changes
+	LastFingerprint = 0,
+	LastTickTime = 0.0,
+	function hostTick( _active )
+	{
+		if (::BBCoop.Battle.HostBattleID == null || ::BBCoop.Battle.MirrorOwners.len() == 0) return;
+		local now = ::Time.getRealTimeF();
+		if (now - this.LastTickTime < 0.5) return;
+		this.LastTickTime = now;
+		local f = 0;
+		foreach (e in ::Tactical.Entities.getAllInstancesAsArray())
+		{
+			if (e == null || !e.isAlive() || !e.isPlacedOnMap()) continue;
+			local t = e.getTile();
+			f = (f * 7 + e.getID() * 31 + t.SquareCoords.X * 101 + t.SquareCoords.Y * 7 + e.getHitpoints() * 3 + e.getActionPoints()) % 1000003;
+		}
+		if (f == this.LastFingerprint) return;
+		this.LastFingerprint = f;
+		foreach (owner, _ in ::BBCoop.Battle.MirrorOwners)
+			::BBCoop.Remote.sendView(owner, _active);
+	}
+
 	function onNeed( _from, _payload )
 	{
 		if (!(_from in ::BBCoop.Battle.MirrorOwners) || _payload.battleID != ::BBCoop.Battle.HostBattleID) return;
@@ -324,7 +428,7 @@
 		this.Scene = _payload;
 		this.Host = _from;
 		this.BattleID = _payload.battleID;
-		this.Fallback = false;
+		this.StripKey = null;
 		this.Leaving = false;
 		this.Result = null;
 		this.SpawnData.clear();
@@ -385,6 +489,7 @@
 		if (battle.PendingRefs == null || _from != battle.PendingHost || _payload.battleID != battle.PendingBattleID) return;
 		this.normalize(_payload);
 		this.View = _payload;
+		this.ViewSeq++;
 		this.NewView = true;
 		this.Busy = false;
 		this.collectSpawns(_payload);
@@ -450,6 +555,8 @@
 		this.Active = true;
 		this.StartTime = ::Time.getRealTimeF();
 		this.Units.clear();
+		this.Removed.clear();
+		this.ActQueue.clear();
 		this.Created.clear();
 		this.Moves.clear();
 		this.CycleFor = null;
@@ -583,9 +690,54 @@
 			this.Moves.push({ id = _u.id, x = _u.x, y = _u.y, tries = 0 });
 	}
 
+	// Removed copies the turn bar may still hold: a dead unit left in the bar later gets a turn,
+	// the bar's UI can't find him and the copy locks up (and once crashed on a selected skill)
+	Removed = [],
+	LastBarClean = 0.0,
+	function cleanTurnBar()
+	{
+		local bar = ::Tactical.TurnSequenceBar;
+		local keep = [];
+		foreach (ref in this.Removed)
+		{
+			if (ref == null || ref.isNull()) continue;
+			local e = ref.get();
+			local inBar = false;
+			try { inBar = bar.getTurnsUntilActive(e.getID()) != null; } catch (error) {}
+			local active = bar.getActiveEntity();
+			local isActive = active != null && active.getID() == e.getID();
+			if (!inBar && !isActive) continue;
+			this.Advancing = true;
+			try
+			{
+				bar.removeEntity(e);
+				::BBCoop.log("Took " + e.getName() + " off the copy's turn bar");
+			}
+			catch (error) { ::BBCoop.log("Turn bar cleanup: " + error); keep.push(ref); }
+			this.Advancing = false;
+		}
+		this.Removed = keep;
+		this.cancelIfNoActive();
+	}
+
+	// The game's cursor code needs a living active unit while a skill is selected
+	function cancelIfNoActive()
+	{
+		local state = this.getState();
+		if (state == null) return;
+		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
+		if (active != null && active.isAlive()) return;
+		if (state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected || state.m.CurrentActionState == ::Const.Tactical.ActionState.ComputePath)
+		{
+			state.m.CurrentActionState = null;
+			state.m.SelectedSkillID = null;
+		}
+	}
+
 	// Gone from the host's battle: dead (corpse) or retreated (just gone)
 	function removeUnit( _e, _dead )
 	{
+		this.Removed.push(::WeakTableRef(_e));
 		this.Killing = true;
 		try
 		{
@@ -607,6 +759,8 @@
 
 	function applyView( _view, _initial )
 	{
+		if (!_initial && this.LastApplied != null) this.logDrift(this.LastApplied);
+		this.LastApplied = _view;
 		this.Moves.clear();
 		local seen = {};
 		local need = [];
@@ -640,6 +794,17 @@
 			if (e.isAlive()) this.removeUnit(e, id in dead);
 		}
 
+		if ("acts" in _view)
+		{
+			local now = ::Time.getRealTimeF();
+			foreach (a in _view.acts)
+			{
+				try { this.ActQueue.push({ id = a.id.tointeger(), skill = a.skill, x = a.x.tointeger(), y = a.y.tointeger(), queued = now }); }
+				catch (error) {}
+			}
+			while (this.ActQueue.len() > 12) this.ActQueue.remove(0); // far behind: skip the oldest
+		}
+
 		if ("log" in _view)
 		{
 			this.Logging = true;
@@ -655,17 +820,25 @@
 			this.Logging = false;
 		}
 
+		this.showHostRound(_view);
+
 		if (need.len() != 0)
 			::BBCoop.Connection.sendMessage("battle_mirror_need", { to = this.Host, battleID = this.BattleID, ids = need });
 
-		if (_view.turn != null && this.Fallback)
-			::BBCoop.Connection.setBattleMirror(true, true);
+	}
+
+	function hasMoveFor( _id )
+	{
+		foreach (m in this.Moves)
+			if (m.id == _id) return true;
+		return false;
 	}
 
 	function updateMoves( _now )
 	{
 		if (this.Moves.len() == 0 || _now < this.NextMoveTime) return;
 		local m = this.Moves.remove(0);
+		if (("due" in m) && _now < m.due) { this.Moves.push(m); return; }
 		local e = this.getUnit(m.id);
 		if (e == null) return;
 		local now = e.getTile();
@@ -677,13 +850,233 @@
 			if (++m.tries < 20) this.Moves.push(m);
 			return;
 		}
-		::Tactical.getNavigator().teleport(e, tile, null, null, true);
+		// animated slide first; if the unit still isn't there a moment later, put it there instantly
+		local instant = m.tries >= 3;
+		try { ::Tactical.getNavigator().teleport(e, tile, null, null, !instant); }
+		catch (error) { ::BBCoop.log("Moving " + e.getName() + " failed: " + error); }
+		m.tries += 3;
+		m.due <- _now + 1.5; // checked again then: done if he arrived
+		if (m.tries < 30) this.Moves.push(m);
 		this.NextMoveTime = _now + 0.25;
+	}
+
+	// Turn marker (Aaron's ask): in a shared battle the brother whose turn it is gets the game's red
+	// arrow over his head, hopping, on every player's screen. Called every frame with the unit acting.
+	MarkRef = null,
+	MarkBaseX = 0,
+	MarkBaseY = 0,
+	function markTurn( _e )
+	{
+		local cur = this.MarkRef != null && !this.MarkRef.isNull() ? this.MarkRef.get() : null;
+		local show = _e != null && _e.isAlive() && _e.isPlacedOnMap()
+			&& (_e.getFaction() == ::Const.Faction.Player || _e.getFaction() == ::Const.Faction.PlayerAnimals);
+		if (cur != null && (!show || cur.getID() != _e.getID())) this.unmarkTurn();
+		else if (cur == null) this.MarkRef = null;
+		if (!show) return;
+		if (this.MarkRef == null)
+		{
+			local base = _e.getSpriteOffset("arrow");
+			this.MarkBaseX = base.X;
+			this.MarkBaseY = base.Y;
+			this.MarkRef = ::WeakTableRef(_e);
+		}
+		local arrow = _e.getSprite("arrow");
+		if (!arrow.Visible) { arrow.Visible = true; arrow.fadeIn(100); }
+		local phase = (::Time.getRealTimeF() * 1.6) % 1.0; // about one and a half hops a second
+		local hop = 4.0 * phase * (1.0 - phase) * 12.0;
+		_e.setSpriteOffset("arrow", ::createVec(this.MarkBaseX, this.MarkBaseY + hop));
+	}
+
+	function unmarkTurn()
+	{
+		local cur = this.MarkRef != null && !this.MarkRef.isNull() ? this.MarkRef.get() : null;
+		this.MarkRef = null;
+		if (cur == null) return;
+		try
+		{
+			cur.setSpriteOffset("arrow", ::createVec(this.MarkBaseX, this.MarkBaseY));
+			if (cur.isAlive()) cur.showArrow(false);
+		}
+		catch (error) {}
+	}
+
+	// The copy's turn bar runs extra rounds while it catches up; the top bar shows the host's round
+	HostRound = null,
+	function showHostRound( _view )
+	{
+		if (!("round" in _view) || _view.round == null || _view.round <= 0) return;
+		local round = _view.round.tointeger();
+		this.HostRound = round;
+		try { ::Time.setRound(round); } catch (error) {}
+		try { ::Tactical.TopbarRoundInformation.update(); } catch (error) {}
+	}
+
+	// For the log: how far our copy is from the host's battle after a view
+	LastDriftLog = 0.0,
+	LastApplied = null,
+	function logDrift( _view )
+	{
+		local off = [], missing = 0;
+		foreach (u in _view.units)
+		{
+			if (!("id" in u)) continue;
+			local e = this.getUnit(u.id);
+			if (e == null) { if (!(u.id in this.Units)) missing++; continue; }
+			local t = e.getTile();
+			if (t.SquareCoords.X != u.x || t.SquareCoords.Y != u.y)
+				off.push(format("%s at %i,%i (host %i,%i)", e.getName(), t.SquareCoords.X, t.SquareCoords.Y, u.x, u.y));
+		}
+		if (off.len() == 0 && missing == 0) return;
+		local now = ::Time.getRealTimeF();
+		if (now - this.LastDriftLog < 10.0) return;
+		this.LastDriftLog = now;
+		local text = format("Copy differs from the host: %i out of place, %i not copied yet", off.len(), missing);
+		if (off.len() != 0) text += ": " + off.reduce(@(a, b) a + "; " + b);
+		::BBCoop.log(text);
 	}
 
 	function isOurTurn()
 	{
-		return this.View != null && this.View.turn != null && !this.Fallback;
+		return this.View != null && this.View.turn != null;
+	}
+
+	// Our brother whose turn it is (his copy here), or null
+	function getTurnEntity()
+	{
+		if (!this.isOurTurn() || !("activeID" in this.View)) return null;
+		return this.getUnit(this.View.activeID);
+	}
+
+	// Moves the copy's turn bar one step at a time toward the host's active unit. Each step waits
+	// until the bar has really moved on (it animates), so no unit is skipped.
+	function updateTurnBar( _now, _active, _targetID, _target )
+	{
+		if (_target == null) return false;
+		local activeID = _active != null ? _active.getID() : null;
+		if (activeID == _target.getID()) return true;
+		if (this.CycleFor != _targetID) { this.CycleFor = _targetID; this.CycleTries = 0; this.LastActiveID = null; this.LastCycle = 0.0; }
+		if (this.CycleTries >= this.Units.len() * 2 + 4) return false; // give up for this turn; the map still works
+		local moved = activeID != this.LastActiveID;
+		if (!moved && _now - this.LastCycle < 2.0) return false; // still animating
+		if (_active != null && ::Tactical.getNavigator().isTravelling(_active)) return false;
+		this.LastActiveID = activeID;
+		this.LastCycle = _now;
+		this.CycleTries++;
+		this.Advancing = true;
+		try { ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) { ::BBCoop.log("Turn bar: " + error); }
+		this.Advancing = false;
+		return false;
+	}
+
+	// The small action strip (skills, wait, end turn) for our turns while the turn bar shows
+	// someone else; with the turn bar on our brother the game's own skill bar does the job
+	function updateStrip( _matched )
+	{
+		local key = null;
+		if (this.isOurTurn() && !_matched)
+		{
+			local state = this.getState();
+			local selected = state != null && state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected ? state.m.SelectedSkillID : "";
+			key = this.ViewSeq + "|" + this.Busy + "|" + selected;
+		}
+		if (key == this.StripKey) return;
+		this.StripKey = key;
+		if (key == null) { ::BBCoop.Connection.setMirrorTurn(null); return; }
+		local state = this.getState();
+		::BBCoop.Connection.setMirrorTurn({
+			turn = this.View.turn,
+			busy = this.Busy,
+			selected = state != null ? state.m.SelectedSkillID : null
+		});
+	}
+
+	function getState()
+	{
+		try { return ::MSU.Utils.getState("tactical_state"); } catch (error) {}
+		return null;
+	}
+
+	// tactical_state.setActionStateByMouseEvent in the copy: clicks act for our brother,
+	// whoever the turn bar shows
+	function onMouse( _state, _mouse )
+	{
+		local e = this.getTurnEntity();
+		if (e == null || this.Busy || _state.isInputLocked()) return false;
+		if (::Tactical.getNavigator().isTravelling(e)) return false;
+		switch (_mouse.getID())
+		{
+			case 1:
+				if (_state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected)
+				{
+					local tile = ::Tactical.getTile(::Tactical.screenToTile(_mouse.getX(), _mouse.getY()));
+					this.onSkill(_state, e, tile);
+				}
+				else if (_state.m.CurrentActionState == ::Const.Tactical.ActionState.ComputePath)
+					_state.executeEntityTravel(e, _mouse);
+				else
+					_state.computeEntityPath(e, _mouse);
+				return true;
+			case 2:
+				this.cancelAction(_state);
+				return true;
+		}
+		return false;
+	}
+
+	function cancelAction( _state )
+	{
+		try
+		{
+			::Tactical.getHighlighter().clear();
+			::Tactical.getNavigator().clearPath();
+			::Tactical.getNavigator().clearVisualisation();
+		}
+		catch (error) {}
+		_state.m.CurrentActionState = null;
+		_state.m.SelectedSkillID = null;
+		::Cursor.setCursor(::Const.UI.Cursor.Hand);
+	}
+
+	// A skill picked in the game's skill bar, by hotkey or in the action strip
+	function selectSkill( _state, _skillID )
+	{
+		local e = this.getTurnEntity();
+		if (e == null || this.Busy) return false;
+		local skill = e.getSkills().getSkillByID(_skillID);
+		if (skill == null) return false;
+		if (!skill.isUsable() || !skill.isAffordable())
+		{
+			::BBCoop.notify(skill.getName() + " can't be used right now.");
+			return true;
+		}
+		if (_state.m.CurrentActionState == ::Const.Tactical.ActionState.SkillSelected && _state.m.SelectedSkillID == _skillID)
+		{
+			this.cancelAction(_state);
+			return true;
+		}
+		this.cancelAction(_state);
+		if (!skill.isTargeted())
+		{
+			this.sendOrder({ action = "skill", skill = skill.getID(), x = -1, y = -1 });
+			return true;
+		}
+		_state.m.SelectedSkillID = skill.getID();
+		_state.m.CurrentActionState = ::Const.Tactical.ActionState.SkillSelected;
+		try { ::Tactical.getHighlighter().highlightRangeOfSkill(skill, e); } catch (error) {}
+		return true;
+	}
+
+	// From the action strip
+	function onStripSkill( _skillID )
+	{
+		local state = this.getState();
+		if (state != null) this.selectSkill(state, _skillID);
+	}
+
+	function onStripOrder( _action )
+	{
+		if (_action == "end") this.onEndTurn();
+		else if (_action == "wait") this.onWait();
 	}
 
 	// Every frame in the mirrored battle, instead of vanilla's turn handling
@@ -720,6 +1113,11 @@
 			try { if (::LoadingScreen.isVisible() && !::LoadingScreen.isAnimating()) ::LoadingScreen.hide(); } catch (error) {}
 		}
 
+		if (now - this.LastBarClean > 0.5)
+		{
+			this.LastBarClean = now;
+			try { this.cleanTurnBar(); } catch (error) {}
+		}
 		if (this.NewView)
 		{
 			this.NewView = false;
@@ -729,40 +1127,27 @@
 
 		local nav = ::Tactical.getNavigator();
 		this.updateMoves(now);
+		this.updateActs(now);
 
-		// keep the turn bar on whoever has the turn in the host's battle
+		// The copy's turn bar only moves for our own brothers' turns (so the game's skill bar is his).
+		// Chasing every unit of the host's battle ran the copy ahead of the host and back again,
+		// because the copy's turn order isn't the host's.
 		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
 		local targetID = this.View != null && ("activeID" in this.View) ? this.View.activeID : null;
 		local target = this.getUnit(targetID);
-		if (target != null && (active == null || active.getID() != target.getID()))
-		{
-			if (this.CycleFor != targetID) { this.CycleFor = targetID; this.CycleTries = 0; }
-			local limit = this.Units.len() * 2 + 4;
-			if (this.CycleTries < limit)
-			{
-				if (now - this.LastCycle > 0.1 && (active == null || !nav.isTravelling(active)))
-				{
-					this.LastCycle = now;
-					this.CycleTries++;
-					this.Advancing = true;
-					try { ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) { ::BBCoop.log("Turn bar: " + error); }
-					this.Advancing = false;
-				}
-			}
-			else if (this.isOurTurn())
-			{
-				::BBCoop.log("Could not bring " + target.getName() + " up in the turn bar, using the battle panel for this battle");
-				this.Fallback = true;
-				::BBCoop.Connection.setBattleMirror(true, true);
-			}
-			return;
-		}
-
-		if (active != null)
+		local activeNow = active != null ? active.getID() : null;
+		if (activeNow != this.SeenActiveID) { this.SeenActiveID = activeNow; this.ActiveSince = now; }
+		try { this.markTurn(target); } catch (error) {}
+		local matched = this.updateTurnBar(now, active, targetID, this.isOurTurn() ? target : null);
+		if (matched)
 		{
 			try { active.onUpdate(); } catch (error) {}
 		}
-		if (this.isOurTurn() && target != null && active != null && !this.Busy && this.Moves.len() == 0)
+		this.updateStrip(matched);
+		// our brother's turn: the map takes clicks (onMouse), whether or not the bar shows him
+		// (only our own brother's pending move holds the input: another unit the copy can't place
+		// used to keep the input locked for the whole turn)
+		if (this.isOurTurn() && target != null && !this.Busy && !this.hasMoveFor(targetID))
 			_state.setInputLocked(false);
 	}
 
@@ -811,6 +1196,39 @@
 	}
 
 	// End turn / wait in the copy (buttons or keys)
+	// The game's own end turn / wait (button, key, End round) count only when the player could have
+	// pressed them: the turn bar shows our brother and has rested on him for a moment. While the bar
+	// catches up, the game ends turns by itself as units enter the first slot; those used to reach the
+	// host as our "end turn" and skipped our brother.
+	SeenActiveID = null,
+	LastIgnoredLog = 0.0,
+	ActiveSince = 0.0,
+	function isPlayerEnding()
+	{
+		if (!this.isOurTurn() || this.Advancing) return false;
+		local mine = this.getTurnEntity();
+		local active = null;
+		try { active = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+		if (mine == null || active == null || active.getID() != mine.getID()) return false;
+		if (active.getID() != this.SeenActiveID) return false;
+		return ::Time.getRealTimeF() - this.ActiveSince > 1.0;
+	}
+
+	function onGameEndTurn()
+	{
+		if (this.isPlayerEnding()) this.onEndTurn();
+		else if (this.isOurTurn() && ::Time.getRealTimeF() - this.LastIgnoredLog > 10.0)
+		{
+			this.LastIgnoredLog = ::Time.getRealTimeF();
+			::BBCoop.log("Ignored an end of turn the copy's turn bar made by itself");
+		}
+	}
+
+	function onGameWait()
+	{
+		if (this.isPlayerEnding()) this.onWait();
+	}
+
 	function onEndTurn()
 	{
 		if (this.isOurTurn() && !this.Busy) this.sendOrder({ action = "end" });
@@ -829,10 +1247,13 @@
 	// tactical_state.onFinish
 	function onTacticalFinish()
 	{
+		this.MarkRef = null;
 		if (!this.Active && this.Scene == null) return;
 		this.Active = false;
 		this.Scene = null;
 		this.Units.clear();
+		this.Removed.clear();
+		this.ActQueue.clear();
 		this.Moves.clear();
 		foreach (ref in this.Created)
 		{
@@ -841,7 +1262,11 @@
 		}
 		this.Created.clear();
 		this.SpawnData.clear();
+		this.LastApplied = null;
+		this.HostRound = null;
 		this.View = null;
+		this.StripKey = null;
+		::BBCoop.Connection.setMirrorTurn(null);
 		::BBCoop.Connection.setBattleMirror(false, false);
 	}
 
@@ -889,10 +1314,71 @@
 		return __original(_activeEntity, _mouseEvent);
 	}
 
+	// clicks on the map act for our brother (mirror.onMouse), not for whoever the turn bar shows
+	q.setActionStateByMouseEvent = @(__original) function( _mouseEvent )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_mouseEvent);
+		try { return ::BBCoop.Mirror.onMouse(this, _mouseEvent); }
+		catch (error) { ::BBCoop.log("Mirror click failed: " + error); }
+		return false;
+	}
+
+	q.setActionStateBySkillId = @(__original) function( _skillId )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_skillId);
+		local e = null;
+		try { e = ::BBCoop.Mirror.getTurnEntity(); } catch (error) {}
+		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
+		if (e != null && active != null && active.getID() == e.getID()) return __original(_skillId); // the game's own skill bar
+		try { ::BBCoop.Mirror.selectSkill(this, _skillId); }
+		catch (error) { ::BBCoop.log("Mirror skill pick failed: " + error); }
+	}
+
+	// skill hotkeys pick from the turn bar's unit: only allow them when that is our brother
+	q.setActionStateBySkillIndex = @(__original) function( _skillIndex )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_skillIndex);
+		local e = null;
+		try { e = ::BBCoop.Mirror.getTurnEntity(); } catch (error) {}
+		local active = ::Tactical.TurnSequenceBar.getActiveEntity();
+		if (e == null || active == null || active.getID() != e.getID()) return false;
+		return __original(_skillIndex);
+	}
+
+	q.topbar_round_information_onQueryRoundInformation = @(__original) function()
+	{
+		local ret = __original();
+		if (::BBCoop.Mirror.Active && ::BBCoop.Mirror.HostRound != null && ret != null)
+			ret.roundNumber = ::BBCoop.Mirror.HostRound;
+		return ret;
+	}
+
+	q.updateCursorAndTooltip = @(__original) function( _skillSelected = false )
+	{
+		if (!::BBCoop.Mirror.Active) return __original(_skillSelected);
+		try { ::BBCoop.Mirror.cancelIfNoActive(); } catch (error) {}
+		try { return __original(_skillSelected); }
+		catch (error) { try { ::BBCoop.Mirror.cancelAction(this); } catch (e2) {} }
+	}
+
 	q.onProcessAI = @(__original) function()
 	{
 		if (::BBCoop.Mirror.Active) return;
 		return __original();
+	}
+});
+
+// Host: note every skill use for the joiners' animations
+::BBCoop.MH.hook("scripts/skills/skill", function(q) {
+	q.use = @(__original) function( ... )
+	{
+		if (!::BBCoop.Mirror.Active && vargv.len() != 0)
+		{
+			try { ::BBCoop.Mirror.onSkillUsed(this, vargv[0]); } catch (error) {}
+		}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
 	}
 });
 
@@ -924,7 +1410,7 @@
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
 		{
-			try { ::BBCoop.Mirror.onEndTurn(); } catch (error) {}
+			try { ::BBCoop.Mirror.onGameEndTurn(); } catch (error) {}
 			return;
 		}
 		local args = [this];
@@ -932,11 +1418,39 @@
 		return __original.acall(args);
 	}
 
+	// "End round" (button or Enter) skips every brother the game counts as player-controlled. On the
+	// host that includes the brothers other players control, so their turns were skipped too: give
+	// those back. In a copy of someone else's battle it just ends our brother's turn.
+	q.onEndTurnAllButtonPressed = @(__original) function( ... )
+	{
+		if (::BBCoop.Mirror.Active)
+		{
+			try { ::BBCoop.Mirror.onGameEndTurn(); } catch (error) {}
+			return;
+		}
+		local args = [this];
+		args.extend(vargv);
+		local ret = __original.acall(args);
+		try
+		{
+			if (::BBCoop.Battle.HostBattleID != null)
+			{
+				foreach (e in ::Tactical.Entities.getInstancesOfFaction(::Const.Faction.Player))
+				{
+					if (e != null && e.isAlive() && ::BBCoop.Remote.getOwner(e) != null && e.getID() != ::BBCoop.Remote.TookOverID)
+						e.setSkipTurn(false);
+				}
+			}
+		}
+		catch (error) { ::BBCoop.log("End round: " + error); }
+		return ret;
+	}
+
 	q.entityWaitTurn = @(__original) function( _entity )
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Advancing)
 		{
-			try { ::BBCoop.Mirror.onWait(); } catch (error) {}
+			try { ::BBCoop.Mirror.onGameWait(); } catch (error) {}
 			return true;
 		}
 		return __original(_entity);

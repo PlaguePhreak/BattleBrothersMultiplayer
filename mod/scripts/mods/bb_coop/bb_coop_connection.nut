@@ -185,6 +185,22 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		if (this.isConnected()) this.m.JSHandle.asyncCall("setBattleMirror", { on = _on, fallback = _fallback });
 	}
 
+	// Our turn in the real battlefield while its turn bar shows someone else: the action strip
+	function setMirrorTurn( _data )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setMirrorTurn", _data);
+	}
+
+	function mirrorSkill( _id )
+	{
+		::BBCoop.Mirror.onStripSkill(_id);
+	}
+
+	function mirrorOrder( _action )
+	{
+		::BBCoop.Mirror.onStripOrder(_action);
+	}
+
 	function closeBattlePanel()
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("closeBattlePanel", null);
@@ -292,6 +308,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
 				bodyBrush = brushes.bodyBrush,
+				banner = ::World.Assets.getBanner(),
 				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
@@ -318,11 +335,24 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "battle_start":
 				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
 				break;
+			case "battle_decline":
+				::BBCoop.Battle.onDecline(_msg.from, _msg.payload);
+				break;
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
 				break;
 			case "session_request":
 				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
+				::BBCoop.Company.onSessionRequest(_msg.from, _msg.payload);
+				break;
+			case "company_save":
+				::BBCoop.Company.onSave(_msg.from, _msg.payload);
+				break;
+			case "company_request":
+				::BBCoop.Company.onRequest(_msg.from, _msg.payload);
+				break;
+			case "company_restore":
+				::BBCoop.Company.onRestore(_msg.from, _msg.payload);
 				break;
 			case "battle_loot":
 				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);
@@ -392,6 +422,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "contract_done":
 				::BBCoop.Contract.onDone(_msg.from, _msg.payload);
+				break;
+			case "contract_track":
+				::BBCoop.Contract.onTrack(_msg.from, _msg.payload);
 				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);

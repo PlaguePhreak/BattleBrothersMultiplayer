@@ -190,7 +190,7 @@ BBCoopConnection.prototype.poll = function (_session)
 				var msg = _data.messages[i];
 				if (msg.from === self.mConfig.playerName) continue;
 				// world updates can be big: don't hand someone else's to the game
-				if (msg.type.indexOf('world_') === 0 && msg.payload && msg.payload.to && msg.payload.to !== self.mConfig.playerName) continue;
+				if ((msg.type.indexOf('world_') === 0 || msg.type.indexOf('company_') === 0) && msg.payload && msg.payload.to && msg.payload.to !== self.mConfig.playerName) continue;
 				self.notePlayer(msg);
 				if (self.handleBattleMessage(msg)) continue;
 				SQ.call(self.mSQHandle, 'onMessage', msg);
@@ -334,14 +334,8 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
 		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
 		if (p.battleID === this.mBattleClosedID) return true;
-		if (this.mMirror && !this.mMirrorFallback) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
-		if (this.mMirror && p.turn === null)
-		{
-			// fallback: the panel is only for our turns, the battlefield shows the rest
-			this.mBattle = { host: _msg.from, view: p, skill: null };
-			if (this.mBattlePanel) this.setBattleHidden(true);
-			return true;
-		}
+		// the real battlefield is the control field: no panel (the game shows an action strip if needed)
+		if (this.mMirror) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
 		this.showBattleView(_msg.from, p);
 		return true;
 	}
@@ -405,14 +399,54 @@ BBCoopConnection.prototype.setBattleHidden = function (_hidden)
 	this.mBattleReopen.css('display', _hidden ? 'block' : 'none');
 };
 
-// Squirrel: the real battlefield is up (on), or can't take our turns (fallback: panel on our turns)
+// Squirrel: the real battlefield is up (on) or gone (off)
 BBCoopConnection.prototype.setBattleMirror = function (_data)
 {
 	this.mMirror = _data.on === true;
-	this.mMirrorFallback = _data.fallback === true;
-	if (this.mMirror && !this.mMirrorFallback) { this.removeBattlePanel(); return; }
-	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && (!this.mMirror || this.mBattle.view.turn !== null))
+	if (this.mMirror) { this.removeBattlePanel(); return; }
+	this.setMirrorTurn(null);
+	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID)
 		this.showBattleView(this.mBattle.host, this.mBattle.view);
+};
+
+// Action strip in the real battlefield: our brother's skills, wait and end turn. Shown only on our
+// turns while the game's turn bar shows someone else (otherwise its own skill bar is there).
+// Targets are picked by clicking the map.
+BBCoopConnection.prototype.setMirrorTurn = function (_data)
+{
+	var self = this;
+	if (this.mMirrorStrip) { this.mMirrorStrip.remove(); this.mMirrorStrip = null; }
+	if (!_data || !_data.turn) return;
+	var turn = _data.turn;
+	var strip = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '50%', bottom: '14rem', transform: 'translateX(-50%)', 'z-index': 99000,
+		background: 'rgba(10, 8, 5, 0.9)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', color: '#e8dcc0',
+		'font-size': '1.4rem', 'text-align': 'center', 'max-width': '90%'
+	}).appendTo($('body'));
+	$('<div/>').text('Your turn: ' + turn.name + ' (' + turn.ap + ' AP, fatigue ' + turn.fatigue + ' / ' + turn.fatigueMax + ')' +
+		(_data.busy ? ' - waiting for the host...' : ' - click a tile twice to move, or pick a skill and click a target')).css('margin-bottom', '0.4rem').appendTo(strip);
+	var button = function (_label, _enabled, _selected, _onClick)
+	{
+		var b = $('<span/>').text(_label).css({
+			display: 'inline-block', padding: '0.3rem 0.6rem', margin: '0.2rem', border: '0.1rem solid ' + (_selected ? '#f0d060' : '#8a6d3b'),
+			background: _selected ? 'rgba(240,208,96,0.2)' : 'rgba(255,255,255,0.05)', color: _enabled ? '#e8dcc0' : '#777', cursor: _enabled ? 'pointer' : 'default'
+		});
+		if (_enabled) b.click(_onClick);
+		return b.appendTo(strip);
+	};
+	for (var i = 0; i < turn.skills.length; i++)
+	{
+		(function (_skill)
+		{
+			button(_skill.name + ' (' + _skill.ap + ')', _skill.usable && !_data.busy, _data.selected === _skill.id, function ()
+			{
+				SQ.call(self.mSQHandle, 'mirrorSkill', _skill.id);
+			});
+		})(turn.skills[i]);
+	}
+	button('Wait', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'wait'); });
+	button('End turn', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'end'); });
+	this.mMirrorStrip = strip;
 };
 
 // Takes the panel off the screen but remembers the battle
@@ -425,6 +459,7 @@ BBCoopConnection.prototype.removeBattlePanel = function ()
 BBCoopConnection.prototype.closeBattlePanel = function ()
 {
 	if (this.mBattle && this.mBattle.view) this.mBattleClosedID = this.mBattle.view.battleID;
+	this.setMirrorTurn(null);
 	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
 	this.mBattlePanel = null;
 	this.mBattle = null;
@@ -1034,6 +1069,10 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	if (typeof _info.cd === 'number' && typeof _info.ed === 'number') { window.BBCoopPendingJoin.cd = _info.cd; window.BBCoopPendingJoin.ed = _info.ed; }
+	if (typeof _info.im === 'boolean') window.BBCoopPendingJoin.im = _info.im;
+	if (typeof _info.pd === 'boolean') window.BBCoopPendingJoin.pd = _info.pd;
+	if (typeof _info.ex === 'boolean') window.BBCoopPendingJoin.ex = _info.ex;
+	if (typeof _info.ge === 'number') window.BBCoopPendingJoin.ge = _info.ge;
 	this.showToast('Joining ' + _from + "'s campaign" + (_info.day ? ' (day ' + _info.day + ')' : '') + ". Pick your origin; the map, difficulty and day are set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
 };
