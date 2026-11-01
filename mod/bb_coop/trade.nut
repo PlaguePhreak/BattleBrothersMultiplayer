@@ -125,9 +125,17 @@
 		local roster = ::World.getPlayerRoster();
 		if (roster.getSize() >= ::World.Assets.getBrothersMax()) return false;
 		local bro = roster.create("scripts/entity/tactical/player");
-		::BBCoop.Roster.deserializeInto(bro, _entry.raw);
-		::BBCoop.Roster.applyAppearance(bro, _entry.look);
-		bro.setName(_entry.name);
+		try
+		{
+			::BBCoop.Roster.deserializeInto(bro, _entry.raw);
+			::BBCoop.Roster.applyAppearance(bro, _entry.look);
+			bro.setName(_entry.name);
+		}
+		catch (error)
+		{
+			roster.remove(bro); // no half-made brother in the roster
+			throw error;
+		}
 		// the sender's formation slot may be taken here: first free slot, reserves included
 		local used = {};
 		foreach (other in roster.getAll())

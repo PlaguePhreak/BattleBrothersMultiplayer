@@ -382,7 +382,7 @@
 		if (f == this.LastFingerprint) return;
 		this.LastFingerprint = f;
 		foreach (owner, _ in ::BBCoop.Battle.MirrorOwners)
-			::BBCoop.Remote.sendView(owner, _active);
+			::BBCoop.Remote.sendView(owner, _active, true);
 	}
 
 	function onNeed( _from, _payload )
@@ -1139,6 +1139,9 @@
 			::BBCoop.Battle.releaseAway("Lost contact with " + this.Host + " during the battle.");
 			return;
 		}
+		// the host said the battle is over but no result came: after a grace period we go home
+		::BBCoop.Battle.checkOver();
+		if (::BBCoop.Battle.PendingRefs == null) return;
 
 		// no unit got a turn yet: vanilla only hides the loading screen once someone does
 		if (now - this.StartTime > 5.0)
@@ -1324,6 +1327,7 @@
 	{
 		if (!this.Active && this.Scene == null) return false;
 		this.Result = { from = _from, payload = _payload };
+		::BBCoop.Battle.OverAt = null;
 		this.leave();
 		return true;
 	}

@@ -24,7 +24,7 @@
 	// ---- joiner ----
 	Restore = null,         // { host, company } waiting to be applied
 	Ready = false,          // our company is the real one: copies may be sent to the host
-	Blocked = false,        // restoring went wrong: never overwrite the host's good copy this session
+	Blocked = false,        // restoring went wrong, or the host keeps a newer copy: never overwrite it this session
 	WaitStart = null,       // when the joined world started waiting for the host's answer
 	LastSent = 0.0,
 
@@ -80,6 +80,7 @@
 		local assets = ::World.Assets;
 		local c = {
 			v = this.Version,
+			rev = this.nextRevision(),
 			player = this.myName(),
 			day = ::World.getTime().Days,
 			name = assets.getName(),
@@ -123,6 +124,29 @@
 		try { c.retinue = this.serializeWith(function( _out ) { ::World.Retinue.onSerialize(_out); }); }
 		catch (error) { ::BBCoop.log("Could not copy the followers: " + error); }
 		return c;
+	}
+
+	// Every copy carries a revision that only goes up in this world (kept in a world flag, so a save
+	// remembers it). The host refuses a copy older than the one it stores: loading an old local save
+	// of a joined world must not roll the company back in the host's save (v0.42.0).
+	function getRevision()
+	{
+		return ::World.Flags.has("BBCoopCompanyRev") ? ::World.Flags.get("BBCoopCompanyRev").tointeger() : 0;
+	}
+
+	function nextRevision()
+	{
+		local rev = this.getRevision() + 1;
+		::World.Flags.set("BBCoopCompanyRev", rev);
+		return rev;
+	}
+
+	// The host keeps a newer copy than the one we just sent: this game's company is behind it
+	function onRefused( _from, _payload )
+	{
+		if (this.joinedHost() != _from || this.Blocked) return;
+		this.Blocked = true;
+		::BBCoop.notify(format("%s's save keeps a newer copy of your company (day %s) than this game has. This game's company won't be stored; rejoin through Multiplayer > Join a world with a new campaign to get the newer one back.", _from, ("day" in _payload) ? "" + _payload.day : "?"));
 	}
 
 	// ---- joiner: sending copies ----
@@ -262,9 +286,10 @@
 		foreach (bro in clone roster.getAll()) roster.remove(bro);
 		foreach (entry in c.bros)
 		{
+			local bro = null;
 			try
 			{
-				local bro = roster.create("scripts/entity/tactical/player");
+				bro = roster.create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				::BBCoop.Roster.applyAppearance(bro, entry.look);
 				bro.setName(entry.name);
@@ -274,8 +299,10 @@
 			{
 				problems.push(entry.name);
 				::BBCoop.log("Could not restore " + entry.name + ": " + error);
+				if (bro != null) try { roster.remove(bro); } catch (e2) {}
 			}
 		}
+		try { ::World.Flags.set("BBCoopCompanyRev", ("rev" in c) && c.rev != null ? c.rev.tointeger() : 0); } catch (error) {}
 
 		try
 		{
@@ -330,6 +357,18 @@
 		if (!::MSU.Utils.hasState("world_state")) return;
 		if (_from == "Bot") return;
 		if (!("bros" in _payload) || _payload.bros.len() == 0) return;
+		local rev = ("rev" in _payload) && _payload.rev != null ? _payload.rev.tointeger() : 0;
+		if (_from in this.Stored)
+		{
+			local have = this.Stored[_from];
+			local haveRev = ("rev" in have) && have.rev != null ? have.rev.tointeger() : 0;
+			if (rev < haveRev || (rev == haveRev && rev != 0))
+			{
+				::BBCoop.log(format("Refused %s's company copy: revision %i is older than the stored %i (day %s vs %s)", _from, rev, haveRev, "" + _payload.day, "" + have.day));
+				::BBCoop.Connection.sendMessage("company_refused", { to = _from, rev = haveRev, day = have.day });
+				return;
+			}
+		}
 		local c = clone _payload;
 		if ("to" in c) delete c.to;
 		if ("why" in c) delete c.why;

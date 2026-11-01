@@ -398,6 +398,12 @@
 
 		foreach (owner, results in byOwner)
 			::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = results, hostWon = hostWon });
+		// players who joined but whose brothers never arrived (late joiners waiting for the round's end)
+		foreach (owner, _ in this.JoinedOwners)
+		{
+			if (!(owner in byOwner))
+				::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = [], hostWon = hostWon, late = true });
+		}
 		::BBCoop.Connection.sendMessage("battle_over", { battleID = battleID });
 
 		// remove the visiting brothers from our game
@@ -415,6 +421,8 @@
 
 	PendingSide = "ally",
 	PendingBattleID = null,
+	OverAt = null,          // real time the host said the battle was over; results get a few seconds to arrive
+	OverGrace = 8.0,
 	HostTimeout = 60.0,     // no word from the host this long while away: our brothers come home
 	LocalEnemies = null,    // world parties we attacked ourselves before joining (removed if our side wins)
 	CombatArgs = null,      // vanilla combat dialog put on hold while the join prompt is open
@@ -521,7 +529,9 @@
 		this.PendingRefs = null;
 		this.PendingHost = null;
 		this.PendingBattleID = null;
+		this.OverAt = null;
 		this.LocalEnemies = null;
+		::BBCoop.Mirror.Result = null; // a result kept for the world map no longer applies
 		::BBCoop.Connection.closeBattlePanel();
 		::BBCoop.Mirror.leave();
 		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
@@ -532,6 +542,7 @@
 		this.PendingRefs = null;
 		this.PendingHost = null;
 		this.PendingBattleID = null;
+		this.OverAt = null;
 		this.LocalEnemies = null;
 		this.Invite = null;
 		this.CombatArgs = null;
@@ -551,14 +562,31 @@
 		if (this.PendingRefs == null) return;
 		try { if (!::World.State.isPaused()) ::World.State.setPause(true); } catch (error) {}
 		if (!::BBCoop.isOnline(this.PendingHost, this.HostTimeout))
+		{
 			this.releaseAway("Lost contact with " + this.PendingHost + " during the battle.");
+			return;
+		}
+		this.checkOver();
+	}
+
+	// The host said its battle is over. The result normally arrives first; when it doesn't (lost,
+	// or the two messages crossed), our brothers come home unharmed after a short wait. While we
+	// watch the copy of the battle the result waits for the world map (Mirror.Result): never
+	// release then, or that result would be thrown away (v0.42.0 fix).
+	function checkOver()
+	{
+		if (this.OverAt == null || this.PendingRefs == null) return;
+		if (::BBCoop.Mirror.Result != null) { this.OverAt = null; return; }
+		if (::Time.getRealTimeF() - this.OverAt < this.OverGrace) return;
+		this.releaseAway("No results arrived from " + this.PendingHost + "'s battle.");
 	}
 
 	function onBattleOver( _from, _payload )
 	{
-		// results come before this message; if none came, they are lost
 		if (this.PendingRefs != null && _from == this.PendingHost && _payload.battleID == this.PendingBattleID)
-			this.releaseAway("No results arrived from " + _from + "'s battle.");
+		{
+			if (::BBCoop.Mirror.Result == null && this.OverAt == null) this.OverAt = ::Time.getRealTimeF();
+		}
 
 		if (this.Invite != null && this.Invite.battleID == _payload.battleID)
 		{
@@ -652,8 +680,16 @@
 	{
 		if (this.PendingRefs == null) return;
 		if (_from != this.PendingHost) return;
+		if (("battleID" in _payload) && _payload.battleID != this.PendingBattleID) return;
 		// watching the copy of the battle: apply the result once we are back on the world map
 		if (::BBCoop.Mirror.keepResult(_from, _payload)) return;
+		this.OverAt = null;
+		if (("late" in _payload) && _payload.late)
+		{
+			// the battle ended before our company was brought in: nothing happened to anyone
+			this.releaseAway(format("%s's battle ended before your company arrived.", _from));
+			return;
+		}
 		local died = [], survived = 0;
 		foreach (entry in _payload.bros)
 		{
@@ -669,9 +705,10 @@
 			}
 			if (entry.raw == null) continue; // keep the original if packing failed
 
+			local bro = null;
 			try
 			{
-				local bro = ::World.getPlayerRoster().create("scripts/entity/tactical/player");
+				bro = ::World.getPlayerRoster().create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				::BBCoop.Roster.copyAppearance(original, bro); // engine-saved sprites aren't in the data
 				::World.getPlayerRoster().remove(original);
@@ -679,7 +716,9 @@
 			}
 			catch (error)
 			{
-				::BBCoop.log("Could not apply result for " + entry.name + ": " + error);
+				::BBCoop.log("Could not apply result for " + entry.name + ": " + error + " (keeping him as he left)");
+				// the half-made copy must not stay next to the original
+				if (bro != null) try { ::World.getPlayerRoster().remove(bro); } catch (e2) {}
 			}
 		}
 		this.PendingRefs = null;

@@ -93,6 +93,7 @@ BBCoopConnection.prototype.start = function (_config)
 	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
 	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
 	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
+	this.mSendQueue = []; // messages for the old session don't go out
 
 	this.log('Connecting to relay ' + _config.relayURL + ' as ' + _config.playerName);
 	var started = new Date().getTime();
@@ -184,6 +185,7 @@ BBCoopConnection.prototype.poll = function (_session)
 		{
 			self.mPollFails = 0;
 			if (self.mRelayDown) { self.mRelayDown = false; self.notify('Connection to the relay is back.'); }
+			if (_data.gap) self.notify('Some messages from the other players were missed while the connection was down (the relay keeps only recent ones).');
 			self.mLastSeq = _data.seq;
 			for (var i = 0; i < _data.messages.length; i++)
 			{
@@ -251,18 +253,53 @@ BBCoopConnection.prototype.sendHostCard = function (_session, _done)
 	});
 };
 
+// Messages go out one after the other (v0.42.0): with one request per message in flight at
+// once, two messages sent back to back could reach the relay in either order, and a joiner
+// handled "battle_over" before the "battle_result" sent just before it.
 BBCoopConnection.prototype.send = function (_msg, _callback)
 {
-	var self = this;
 	if (this.mConfig === null) return;
-	this.request('POST', '/send', {
-		from: this.mConfig.playerName,
-		type: _msg.type,
-		payload: _msg.payload
-	}, function (_status)
+	if (!this.mSendQueue) this.mSendQueue = [];
+	this.mSendQueue.push({ msg: _msg, callback: _callback, session: this.mSessionId });
+	this.flushSends();
+};
+
+BBCoopConnection.prototype.flushSends = function ()
+{
+	var self = this;
+	if (this.mSending || !this.mSendQueue || this.mSendQueue.length === 0) return;
+	var next = this.mSendQueue.shift();
+	if (next.session !== this.mSessionId || this.mConfig === null) { this.flushSends(); return; }
+	this.mSending = true;
+	var done = function (_status)
 	{
-		if (_status !== 200) self.log('Send failed (status ' + _status + ')');
-		if (_callback) _callback(_status === 200);
+		self.mSending = false;
+		if (_status !== 200) self.log('Send failed (status ' + _status + ', ' + next.msg.type + ')');
+		if (next.callback) next.callback(_status === 200);
+		self.flushSends();
+	};
+	try
+	{
+		this.request('POST', '/send', { from: this.mConfig.playerName, type: next.msg.type, payload: next.msg.payload }, done);
+	}
+	catch (e)
+	{
+		this.log('Send failed (' + e + ')');
+		done(0);
+	}
+};
+
+// Ctrl+J: how is the relay doing, without joining again
+BBCoopConnection.prototype.ping = function (_config)
+{
+	var self = this;
+	if (this.mConfig === null || !this.mPollTimer) { this.start(_config); return; }
+	var started = new Date().getTime();
+	this.request('GET', '/ping', null, function (_status, _data)
+	{
+		if (_status !== 200 || _data === null) { self.notify('Could not reach the co-op relay at ' + self.mConfig.relayURL + ' (status ' + _status + ').'); return; }
+		var ms = new Date().getTime() - started;
+		self.notify('Relay reachable (' + ms + ' ms round trip, relay v' + _data.version + ', ' + _data.players + ' / ' + _data.max + ' players).');
 	});
 };
 
@@ -330,12 +367,19 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 	if (_msg.type === 'battle_view')
 	{
 		if (!forMe) return true;
+		// between-turns views leave the terrain out (it never changes): take it from the last full view
+		if (p.map && p.map.terrain === undefined)
+		{
+			var last = this.mBattle && this.mBattle.view && this.mBattle.view.battleID === p.battleID ? this.mBattle.view.map : null;
+			if (last && last.terrain !== undefined) { p.map.terrain = last.terrain; p.map.levels = last.levels; }
+		}
 		// the game keeps the views too: it may be showing the real battlefield (v0.18.0)
 		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
 		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
 		if (p.battleID === this.mBattleClosedID) return true;
 		// the real battlefield is the control field: no panel (the game shows an action strip if needed)
 		if (this.mMirror) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
+		if (p.map && p.map.terrain === undefined) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; } // can't draw it yet
 		this.showBattleView(_msg.from, p);
 		return true;
 	}
@@ -405,7 +449,7 @@ BBCoopConnection.prototype.setBattleMirror = function (_data)
 	this.mMirror = _data.on === true;
 	if (this.mMirror) { this.removeBattlePanel(); return; }
 	this.setMirrorTurn(null);
-	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID)
+	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && this.mBattle.view.map && this.mBattle.view.map.terrain !== undefined)
 		this.showBattleView(this.mBattle.host, this.mBattle.view);
 };
 

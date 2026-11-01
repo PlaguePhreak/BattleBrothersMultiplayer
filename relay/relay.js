@@ -15,9 +15,9 @@ const { URL } = require('url');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const VERSION = '0.41.0';
+const VERSION = '0.42.0';
 // Bumped only when the messages between games change; games with a different protocol can't play together
-const PROTOCOL = 7;
+const PROTOCOL = 8;
 const MAX_PLAYERS = 8;
 const args = process.argv.slice(2);
 const BOT = args.includes('--bot');
@@ -33,6 +33,11 @@ function passwordOK(given) {
 const PORT = parseInt(args.find((a) => /^\d+$/.test(a)) || process.env.PORT || '7777', 10);
 const POLL_HOLD_MS = 8000;      // must stay below the mod's 10s request timeout
 const MAX_MESSAGES = 500;       // keep a short history in memory
+// Frequent updates (positions, heartbeats, battle views) are dropped from the history first, so a
+// one-off message (a battle result, a trade confirmation, a payment) survives a longer outage
+const CHATTY = new Set(['pos', 'alive', 'battle_view', 'world_parties', 'world_time', 'busy', 'contract_track']);
+const MAX_CHATTY = 200;
+const HOST_CARD_TTL_MS = 60000;  // the host's game sends its card every 10s; older than this, the session is gone
 
 let seq = 0;
 // Changes every time the relay starts, so games notice a restart and catch up
@@ -201,9 +206,16 @@ function printInvite() {
   else console.log('No invite code yet: no address friends can reach was found. Use start-host.bat (free tunnel) or Tailscale, or press Ctrl+I in the game and paste your address.');
 }
 
+// Only the host's own game may change the session. A request through the cloudflared tunnel
+// also arrives from 127.0.0.1 (the tunnel forwards it locally), but carries the forwarding headers.
 function isLocal(req) {
+  if (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.headers['cf-ray']) return false;
   const a = req.socket.remoteAddress || '';
   return a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1';
+}
+
+function hostCardFresh() {
+  return hostCard !== null && Date.now() - hostCard.time <= HOST_CARD_TTL_MS;
 }
 
 function maxPlayers() {
@@ -217,7 +229,7 @@ function countedPlayers() {
 }
 
 function publicCard() {
-  if (!hostCard) return null;
+  if (!hostCardFresh()) return null;
   const { host, name, company, day, modVersion, gameVersion, protocol, dlcs } = hostCard;
   return { host, name, company, day, modVersion, gameVersion, protocol, dlcs, max: maxPlayers() };
 }
@@ -241,7 +253,12 @@ function pushMessage(from, type, payload) {
     }
   }
   messages.push(msg);
-  if (messages.length > MAX_MESSAGES) messages.shift();
+  if (CHATTY.has(type)) {
+    let chatty = 0;
+    for (const m of messages) if (CHATTY.has(m.type)) chatty++;
+    if (chatty > MAX_CHATTY) dropOldest((m) => CHATTY.has(m.type));
+  }
+  if (messages.length > MAX_MESSAGES && !dropOldest((m) => CHATTY.has(m.type))) dropOldest(() => true);
   if (type === 'world_full' && payload) {
     console.log(`[${new Date().toISOString()}] ${from}: world_full (${(payload.parties || []).length} parties, ${(payload.locations || []).length} locations, day ${payload.day})`);
   } else if (type !== 'pos' && type !== 'world_parties' && type !== 'world_time' && type !== 'busy') {
@@ -498,8 +515,11 @@ function botOrder(host, view, order) {
 }
 
 function botBattleView(host, view) {
+  if (view.map && view.map.terrain === undefined && botBattle.view && botBattle.view.battleID === view.battleID && botBattle.view.map.terrain !== undefined) {
+    view.map.terrain = botBattle.view.map.terrain; view.map.levels = botBattle.view.map.levels;
+  }
   botBattle.view = view;
-  if (!view.turn) return;
+  if (!view.turn || !view.map || view.map.terrain === undefined) return;
   const t = view.turn, map = view.map;
   const turnId = `${t.key}@${view.round}`;
   if (botBattle.turnId !== turnId) Object.assign(botBattle, { turnId, moved: false, steps: 0 });
@@ -567,6 +587,16 @@ function botTick() {
   });
 }
 
+// Highest seq of a one-off message that fell out of the history: a client still behind it missed something
+let lostUpTo = 0;
+function dropOldest(pred) {
+  const i = messages.findIndex(pred);
+  if (i < 0) return false;
+  const [m] = messages.splice(i, 1);
+  if (!CHATTY.has(m.type)) lostUpTo = Math.max(lostUpTo, m.seq);
+  return true;
+}
+
 function messagesSince(since) {
   return messages.filter((m) => m.seq > since);
 }
@@ -630,7 +660,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       if (!body.player) return sendJSON(res, 400, { error: 'player required' });
       // a different protocol can't play with the host; old games send none
-      if (hostCard && body.player !== hostCard.host && (body.protocol | 0) !== hostCard.protocol) {
+      if (hostCardFresh() && body.player !== hostCard.host && (body.protocol | 0) !== hostCard.protocol) {
         return sendJSON(res, 409, { error: 'version', hostVersion: hostCard.modVersion, protocol: hostCard.protocol });
       }
       // session full: players already connected may come back, nobody new past the host's limit
@@ -665,8 +695,10 @@ const server = http.createServer(async (req, res) => {
       let since = parseInt(url.searchParams.get('since') || '0', 10);
       if (since > seq) since = 0; // the client knew an older relay run: send everything from this one
       touch(player);
+      // the client's last message fell out of the history: it missed some, and is told so
+      const gap = since > 0 && since < lostUpTo;
       const pending = messagesSince(since).filter((m) => m.from !== player);
-      if (pending.length) return sendJSON(res, 200, { seq, boot: BOOT, messages: pending });
+      if (pending.length) return sendJSON(res, 200, { seq, boot: BOOT, messages: pending, gap });
       // nothing yet: hold the request open until something arrives
       const w = {
         flush() {

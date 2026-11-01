@@ -43,11 +43,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		return url.find("://127.0.0.1") != null || url.find("://localhost") != null;
 	}
 
+	// Ctrl+J: check the relay again without re-joining the session (re-joining told everyone
+	// "X joined" each time). Not connected yet: connect with the current settings.
 	function runPing()
 	{
 		if (!this.isConnected()) return;
-		// settings may have changed since the main menu, so send them again
-		this.m.JSHandle.asyncCall("start", this.getConfig());
+		this.m.JSHandle.asyncCall("ping", this.getConfig());
 	}
 
 	function sendHello()
@@ -340,6 +341,18 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		if (typeof _msg.payload == "table" && ("to" in _msg.payload) && _msg.payload.to != ::BBCoop.getSetting("PlayerName"))
 			return;
 
+		try
+		{
+			this.dispatch(_msg);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Handling a " + _msg.type + " message from " + _msg.from + " failed: " + error);
+		}
+	}
+
+	function dispatch( _msg )
+	{
 		switch (_msg.type)
 		{
 			case "alive":
@@ -368,6 +381,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "company_restore":
 				::BBCoop.Company.onRestore(_msg.from, _msg.payload);
+				break;
+			case "company_refused":
+				::BBCoop.Company.onRefused(_msg.from, _msg.payload);
 				break;
 			case "battle_loot":
 				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);

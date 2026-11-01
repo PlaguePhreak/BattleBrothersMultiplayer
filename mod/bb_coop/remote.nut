@@ -78,7 +78,9 @@
 		return ".";
 	}
 
-	function buildView( _owner, _active )
+	// _light: a between-turns update for players watching the copy (sent up to twice a second):
+	// leaves out the terrain, which never changes and is the bulk of a view
+	function buildView( _owner, _active, _light = false )
 	{
 		local size = ::Tactical.getMapSize();
 		local terrain = "", levels = "";
@@ -101,13 +103,15 @@
 			{
 				if (!::Tactical.isValidTileSquare(x, y))
 				{
-					terrain += " ";
-					levels += "0";
+					if (!_light) { terrain += " "; levels += "0"; }
 					continue;
 				}
 				local t = ::Tactical.getTileSquare(x, y);
-				terrain += this.terrainChar(t);
-				levels += ::Math.max(0, ::Math.min(9, t.Level)).tostring();
+				if (!_light)
+				{
+					terrain += this.terrainChar(t);
+					levels += ::Math.max(0, ::Math.min(9, t.Level)).tostring();
+				}
 
 				if (!t.IsOccupiedByActor) continue;
 				local u = t.getEntity();
@@ -138,11 +142,16 @@
 			to = _owner,
 			battleID = ::BBCoop.Battle.HostBattleID,
 			round = 0,
-			map = { w = size.X, h = size.Y, oddDown = this.isOddColumnDown(), terrain = terrain, levels = levels },
+			map = { w = size.X, h = size.Y, oddDown = this.isOddColumnDown() },
 			units = units,
 			turn = null
 		};
 		try { view.round = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+		if (!_light)
+		{
+			view.map.terrain <- terrain;
+			view.map.levels <- levels;
+		}
 		if (mirror)
 		{
 			view.activeID <- _active != null ? _active.getID() : null;
@@ -223,11 +232,11 @@
 		};
 	}
 
-	function sendView( _owner, _active )
+	function sendView( _owner, _active, _light = false )
 	{
 		try
 		{
-			::BBCoop.Connection.sendMessage("battle_view", this.buildView(_owner, _active));
+			::BBCoop.Connection.sendMessage("battle_view", this.buildView(_owner, _active, _light));
 			this.LastViewSent = ::Time.getRealTimeF();
 		}
 		catch (error)
