@@ -134,3 +134,24 @@
 		}
 	}
 });
+
+// Same origin, different brothers (v0.26.0): the new campaign seeds the dice with the map seed
+// right before the origin rolls its starting brothers, so a joiner who picked the host's origin
+// got the host's exact brothers. A joiner's company is rolled from the map seed plus their name
+// instead (the map itself is built before this, from the seed alone, so it still matches).
+// Checked against vanilla world_state.startNewCampaign (seedRandomString, then onSpawnPlayer).
+::BBCoop.MH.hookTree("scripts/scenarios/world/starting_scenario", function(q) {
+	q.onSpawnPlayer = @(__original) function()
+	{
+		try
+		{
+			local info = ::BBCoop.Join.Pending;
+			if (info != null) ::Math.seedRandomString(info.seed + "|" + ::BBCoop.getSetting("PlayerName"));
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not reroll the starting company: " + error);
+		}
+		return __original();
+	}
+});
