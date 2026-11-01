@@ -289,7 +289,8 @@
 			day = ::World.getTime().Days,
 			parties = parties,
 			locations = locations,
-			settlements = settlements
+			settlements = settlements,
+			founded = ::BBCoop.Settlements.pack() // v0.44.0: villages founded by prosperous towns
 		});
 	}
 
@@ -740,6 +741,7 @@
 		this.removeLocalParties(refs);
 		this.syncMirrors();
 		this.syncLocations(refs);
+		try { ::BBCoop.Settlements.sync(this.Snapshot); } catch (error) { ::BBCoop.log("Copying founded settlements failed: " + error); }
 		this.syncSettlements();
 	}
 

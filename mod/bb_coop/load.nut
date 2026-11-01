@@ -13,6 +13,7 @@ page.addStringSetting("LastServerHost", "", "Last server's host", "Who hosted th
 page.addStringSetting("SavedHosts", "", "Saved hosts", "Hosts in your join list (added by invite code or by joining). Filled in automatically.");
 page.addStringSetting("CoopSaves", "", "Co-op saves", "Save files used in multiplayer, marked Co-op in the Load screen. Filled in automatically.");
 page.addBooleanSetting("RealBattleView", true, "Real battlefield in shared battles", "When you join another player's battle, watch and play it on a copy of their real battlefield. Off: the simple battle panel.");
+page.addBooleanSetting("NewSettlements", true, "New settlements (hosting)", "Prosperous towns in your world found new villages nearby, with a road to them. Joiners always copy the host's world.");
 page.addBooleanSetting("ShowNotifications", true, "Show notifications", "Show co-op messages on screen. They are always written to log.html.");
 // Hosting: drop a player's stored company and send them back to the main menu to make a new one (v0.43.0)
 local resetName = page.addStringSetting("ResetCompanyOf", "", "Reset a player's company (hosting)", "Type the player's name exactly as shown in the session, then press the button below (or apply this field). Their company is removed from your save and their game goes back to the main menu; they make a new company when they join again.");
@@ -188,6 +189,7 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 ::include("bb_coop/join.nut");
 ::include("bb_coop/loot.nut");
 ::include("bb_coop/world.nut");
+::include("bb_coop/settlements.nut");
 ::include("bb_coop/time.nut");
 ::include("bb_coop/trade.nut");
 ::include("bb_coop/contract.nut");
