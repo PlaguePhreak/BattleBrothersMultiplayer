@@ -18,6 +18,10 @@
 	LogIndex = {},          // owner -> how many log lines they have
 	DeadIDs = [],           // entity ids killed in this battle (anything else that vanished retreated)
 	LogMax = 400,
+	Acts = [],              // host: skill uses this battle ({ id, skill, x, y }), for joiners' animations
+	ActIndex = {},          // owner -> how many acts they have
+	ActQueue = [],          // copy: acts still to play
+	NextActTime = 0.0,
 
 	// ---- joiner side ----
 	Scene = null,           // battle_scene from the host, waiting for the tactical map
@@ -92,6 +96,8 @@
 		this.MapSetup = null;
 		this.LogLines.clear();
 		this.LogIndex.clear();
+		this.Acts.clear();
+		this.ActIndex.clear();
 		this.DeadIDs.clear();
 		this.LastFingerprint = 0;
 		if (_state.isScenarioMode()) return;
@@ -171,6 +177,78 @@
 			this.LogLines.remove(0);
 			foreach (owner, i in this.LogIndex) this.LogIndex[owner] = ::Math.max(0, i - 1);
 		}
+	}
+
+	// Host: a unit used a skill (attack, shot, buff...). Joiners' copies replay it as an animation.
+	function onSkillUsed( _skill, _tile )
+	{
+		if (::BBCoop.Battle.HostBattleID == null || ::BBCoop.Battle.MirrorOwners.len() == 0 || _tile == null) return;
+		local user = _skill.getContainer().getActor();
+		if (user == null || !user.isPlacedOnMap()) return;
+		this.Acts.push({ id = user.getID(), skill = _skill.getID(), x = _tile.SquareCoords.X, y = _tile.SquareCoords.Y });
+		if (this.Acts.len() > this.LogMax)
+		{
+			this.Acts.remove(0);
+			foreach (owner, i in this.ActIndex) this.ActIndex[owner] = ::Math.max(0, i - 1);
+		}
+	}
+
+	function takeActsFor( _owner )
+	{
+		local from = _owner in this.ActIndex ? this.ActIndex[_owner] : 0;
+		local ret = [];
+		for (local i = from; i < this.Acts.len(); i++) ret.push(this.Acts[i]);
+		this.ActIndex[_owner] <- this.Acts.len();
+		return ret;
+	}
+
+	// Copy: play one act: the skill's sound, a shot flying for ranged skills, the user lunging and
+	// whoever stands on the target tile flinching. Nothing is changed: hitpoints come with the view.
+	function playAct( _act )
+	{
+		local user = this.getUnit(_act.id);
+		if (user == null || !user.isAlive() || !user.isPlacedOnMap()) return;
+		if (!::Tactical.isValidTileSquare(_act.x, _act.y)) return;
+		local tile = ::Tactical.getTileSquare(_act.x, _act.y);
+		local skill = null;
+		try { skill = user.getSkills().getSkillByID(_act.skill); } catch (error) {}
+		if (skill != null)
+		{
+			try
+			{
+				if (skill.m.SoundOnUse.len() != 0)
+					::Sound.play(skill.m.SoundOnUse[::Math.rand(0, skill.m.SoundOnUse.len() - 1)], ::Const.Sound.Volume.Skill, user.getPos());
+			}
+			catch (error) {}
+			try
+			{
+				local type = skill.getProjectileType();
+				if (type != ::Const.ProjectileType.None && !tile.isSameTileAs(user.getTile()))
+				{
+					local flip = tile.SquareCoords.X < user.getTile().SquareCoords.X;
+					::Tactical.spawnProjectileEffect(::Const.ProjectileSprite[type], user.getTile(), tile, 1.0, 1.0, true, flip);
+				}
+			}
+			catch (error) {}
+		}
+		if (tile.isSameTileAs(user.getTile())) return;
+		try { ::Tactical.getShaker().shake(user, tile, 2); } catch (error) {}
+		if (!tile.IsEmpty && tile.IsOccupiedByActor)
+		{
+			try { ::Tactical.getShaker().shake(tile.getEntity(), user.getTile(), 3); } catch (error) {}
+		}
+	}
+
+	function updateActs( _now )
+	{
+		if (this.ActQueue.len() == 0 || _now < this.NextActTime) return;
+		local act = this.ActQueue[0];
+		local user = this.getUnit(act.id);
+		// let a unit finish walking there first (but don't wait forever)
+		if (user != null && ::Tactical.getNavigator().isTravelling(user) && _now - act.queued < 3.0) return;
+		this.ActQueue.remove(0);
+		try { this.playAct(act); } catch (error) {}
+		this.NextActTime = _now + 0.6;
 	}
 
 	function takeLogFor( _owner )
@@ -478,6 +556,7 @@
 		this.StartTime = ::Time.getRealTimeF();
 		this.Units.clear();
 		this.Removed.clear();
+		this.ActQueue.clear();
 		this.Created.clear();
 		this.Moves.clear();
 		this.CycleFor = null;
@@ -713,6 +792,17 @@
 			if (id in seen || ref == null || ref.isNull()) continue;
 			local e = ref.get();
 			if (e.isAlive()) this.removeUnit(e, id in dead);
+		}
+
+		if ("acts" in _view)
+		{
+			local now = ::Time.getRealTimeF();
+			foreach (a in _view.acts)
+			{
+				try { this.ActQueue.push({ id = a.id.tointeger(), skill = a.skill, x = a.x.tointeger(), y = a.y.tointeger(), queued = now }); }
+				catch (error) {}
+			}
+			while (this.ActQueue.len() > 12) this.ActQueue.remove(0); // far behind: skip the oldest
 		}
 
 		if ("log" in _view)
@@ -1037,6 +1127,7 @@
 
 		local nav = ::Tactical.getNavigator();
 		this.updateMoves(now);
+		this.updateActs(now);
 
 		// The copy's turn bar only moves for our own brothers' turns (so the game's skill bar is his).
 		// Chasing every unit of the host's battle ran the copy ahead of the host and back again,
@@ -1162,6 +1253,7 @@
 		this.Scene = null;
 		this.Units.clear();
 		this.Removed.clear();
+		this.ActQueue.clear();
 		this.Moves.clear();
 		foreach (ref in this.Created)
 		{
@@ -1273,6 +1365,20 @@
 	{
 		if (::BBCoop.Mirror.Active) return;
 		return __original();
+	}
+});
+
+// Host: note every skill use for the joiners' animations
+::BBCoop.MH.hook("scripts/skills/skill", function(q) {
+	q.use = @(__original) function( ... )
+	{
+		if (!::BBCoop.Mirror.Active && vargv.len() != 0)
+		{
+			try { ::BBCoop.Mirror.onSkillUsed(this, vargv[0]); } catch (error) {}
+		}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
 	}
 });
 

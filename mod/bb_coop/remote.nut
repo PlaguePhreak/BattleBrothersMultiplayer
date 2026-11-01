@@ -147,6 +147,7 @@
 		{
 			view.activeID <- _active != null ? _active.getID() : null;
 			view.log <- ::BBCoop.Mirror.takeLogFor(_owner);
+			view.acts <- ::BBCoop.Mirror.takeActsFor(_owner);
 			view.dead <- clone ::BBCoop.Mirror.DeadIDs;
 		}
 		if (_active != null && this.getOwner(_active) == _owner && this.controls(_active))
