@@ -172,23 +172,36 @@
 	}
 });
 
-// Same origin, different brothers (v0.26.0): the new campaign seeds the dice with the map seed
-// right before the origin rolls its starting brothers, so a joiner who picked the host's origin
-// got the host's exact brothers. A joiner's company is rolled from the map seed plus their name
-// instead (the map itself is built before this, from the seed alone, so it still matches).
-// Checked against vanilla world_state.startNewCampaign (seedRandomString, then onSpawnPlayer).
+// Same origin, different brothers (v0.26.0, fixed v0.43.2): the new campaign seeds the dice with
+// the map seed right before the origin rolls its starting brothers, so a joiner who picked the
+// host's origin got the host's exact brothers. A joiner's company is rolled from the map seed plus
+// their name instead (the map itself is built before this, from the seed alone, so it still
+// matches). Checked against vanilla world_state.startNewCampaign: seedRandomString, then
+// Assets.setCampaignSettings -> origin.onSpawnAssets (the brothers), then origin.onSpawnPlayer.
+// v0.26 reseeded in onSpawnPlayer, after the brothers were already made; both are reseeded now.
+::BBCoop.Join.reseedForPlayer <- function()
+{
+	try
+	{
+		local info = ::BBCoop.Join.Pending;
+		if (info != null) ::Math.seedRandomString(info.seed + "|" + ::BBCoop.getSetting("PlayerName"));
+	}
+	catch (error)
+	{
+		::BBCoop.log("Could not reroll the starting company: " + error);
+	}
+}
+
 ::BBCoop.MH.hookTree("scripts/scenarios/world/starting_scenario", function(q) {
+	q.onSpawnAssets = @(__original) function()
+	{
+		::BBCoop.Join.reseedForPlayer();
+		return __original();
+	}
+
 	q.onSpawnPlayer = @(__original) function()
 	{
-		try
-		{
-			local info = ::BBCoop.Join.Pending;
-			if (info != null) ::Math.seedRandomString(info.seed + "|" + ::BBCoop.getSetting("PlayerName"));
-		}
-		catch (error)
-		{
-			::BBCoop.log("Could not reroll the starting company: " + error);
-		}
+		::BBCoop.Join.reseedForPlayer();
 		return __original();
 	}
 });
