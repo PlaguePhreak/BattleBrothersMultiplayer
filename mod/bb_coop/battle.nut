@@ -456,19 +456,27 @@
 
 	function onBattleStartMessage( _from, _payload )
 	{
-		if (this.isInTactical() || this.PendingRefs != null || _payload.pos == null)
+		if (_payload.pos == null)
 		{
-			this.sendDecline(_from, _payload.battleID); // busy with our own fight, or already fighting elsewhere
+			this.sendDecline(_from, _payload.battleID);
+			return;
+		}
+		local clan = ("clan" in _payload) ? _payload.clan : "";
+		this.Invite = {
+			host = _from, battleID = _payload.battleID, time = ::Time.getRealTimeF(), pos = _payload.pos, clan = clan,
+			enemies = ("enemies" in _payload) ? _payload.enemies : [], asked = false
+		};
+		if (this.isInTactical() || this.PendingRefs != null)
+		{
+			// busy with our own fight, or already fighting elsewhere: the host's join window shouldn't
+			// wait for us, but the invite is kept, and offered once we are free (Aaron, v0.42.1)
+			this.sendDecline(_from, _payload.battleID);
+			::BBCoop.log(_from + " started a battle; you are asked to join once your own fight is over");
 			return;
 		}
 
 		local dist = 0.0;
 		try { dist = this.distanceTo(_payload.pos); } catch (error) { this.sendDecline(_from, _payload.battleID); return; }
-		local clan = ("clan" in _payload) ? _payload.clan : "";
-		this.Invite = {
-			host = _from, battleID = _payload.battleID, time = ::Time.getRealTimeF(), pos = _payload.pos, clan = clan,
-			enemies = ("enemies" in _payload) ? _payload.enemies : []
-		};
 		if (dist > this.JoinRange)
 		{
 			::BBCoop.log(format("%s started a battle %.0f units away (join range %.0f)", _from, dist, this.JoinRange));
@@ -481,10 +489,23 @@
 		this.showJoinPrompt(text, false);
 	}
 
+	// Back on the world map (own battle over, or home from someone else's): a battle we were invited
+	// to while busy is offered now, if it is still going and still close
+	function offerKeptInvite()
+	{
+		if (this.Invite == null || this.Invite.asked || this.CombatArgs != null || this.PendingRefs != null || this.isInTactical()) return;
+		if (::Time.getRealTimeF() - this.Invite.time > 900.0) { this.Invite = null; return; }
+		local dist = 9999.0;
+		try { dist = this.distanceTo(this.Invite.pos); } catch (error) {}
+		if (dist > this.JoinRange) return; // Ctrl+B still works if they move closer
+		this.showJoinPrompt(this.describeInvite(this.Invite) + " nearby, still going.", false);
+	}
+
 	// Clanmates only get "join"; everyone else picks a side
 	function showJoinPrompt( _text, _fromEngage )
 	{
 		local invite = this.Invite;
+		invite.asked <- true;
 		local options = [];
 		if (this.isClanmate(invite.clan))
 		{
@@ -535,6 +556,7 @@
 		::BBCoop.Connection.closeBattlePanel();
 		::BBCoop.Mirror.leave();
 		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
+		try { this.offerKeptInvite(); } catch (error) {}
 	}
 
 	function onLeaveWorld()
@@ -749,6 +771,7 @@
 		local text = format("The battle with %s is over, your side %s. %i of your brothers came back", _from, ourSideWon ? "won" : "lost", survived);
 		if (died.len() != 0) text += ". Fallen: " + died.reduce(@(a, b) a + ", " + b);
 		::BBCoop.notify(text + ".");
+		try { this.offerKeptInvite(); } catch (error) {}
 	}
 };
 
@@ -848,6 +871,13 @@
 	{
 		try { ::BBCoop.Battle.onLeaveWorld(); } catch (error) { ::BBCoop.log("onLeaveWorld failed: " + error); }
 		__original();
+	}
+
+	// our own battle is over: a battle we were invited to meanwhile is offered now
+	q.onCombatFinished = @(__original) function()
+	{
+		__original();
+		try { ::BBCoop.Battle.offerKeptInvite(); } catch (error) { ::BBCoop.log("Offering the kept invite failed: " + error); }
 	}
 });
 

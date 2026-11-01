@@ -191,7 +191,7 @@
 			if (now - this.WaitStart > this.WaitForHost)
 			{
 				this.Ready = true;
-				::BBCoop.log(host + " sent no stored company; this company becomes the one kept in their save.");
+				::BBCoop.notify(host + "'s save has no company of yours (or the answer never arrived), so you start with this new company. It is kept in their save from now on.");
 			}
 			return;
 		}
@@ -212,6 +212,7 @@
 				this.LastSent = 0.0; // send the first copy right away
 			}
 			::BBCoop.log(_from + " has no company of ours stored.");
+			if (this.joinedHost() == _from) ::BBCoop.notify(_from + "'s save has no company of yours yet: this new company is the one kept there from now on.");
 			return;
 		}
 		if (this.Ready && this.joinedHost() == _from) return; // already playing the restored company

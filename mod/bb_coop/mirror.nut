@@ -1287,11 +1287,13 @@
 	}
 
 	// tactical_state.onFinish
+	Finishing = false,      // a copy just closed: vanilla's world_state.onCombatFinished runs for it next
 	function onTacticalFinish()
 	{
 		this.MarkRef = null;
 		::BBCoop.Connection.setTurnNotice(null);
 		if (!this.Active && this.Scene == null) return;
+		this.Finishing = true;
 		this.Active = false;
 		this.Scene = null;
 		this.Units.clear();
@@ -1560,11 +1562,38 @@
 	}
 });
 
+// Back on the world map after a copy of someone else's battle. Checked against vanilla
+// world_state.onCombatFinished (v0.42.1): with no parties of ours in that fight it would still put a
+// battlefield marker where our company stands and stun the parties around us; the arena flag skips the
+// marker (and the empty parties loop), the stun is skipped below. The rest (brothers' onCombatFinished,
+// ammo refill, repairs, time reset to the combat start) is harmless here: nobody of ours fought in it.
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
 	q.onCombatFinished = @(__original) function()
 	{
+		local mirror = ::BBCoop.Mirror.Finishing;
+		local wasArena = null;
+		if (mirror)
+		{
+			try
+			{
+				wasArena = ::World.Statistics.getFlags().get("LastCombatWasArena");
+				::World.Statistics.getFlags().set("LastCombatWasArena", true);
+			}
+			catch (error) {}
+		}
 		__original();
+		if (mirror)
+		{
+			::BBCoop.Mirror.Finishing = false;
+			try { ::World.Statistics.getFlags().set("LastCombatWasArena", wasArena == true); } catch (error) {}
+		}
 		try { ::BBCoop.Mirror.onBackInWorld(); }
 		catch (error) { ::BBCoop.log("Applying the battle result failed: " + error); }
+	}
+
+	q.stunPartiesNearPlayer = @(__original) function()
+	{
+		if (::BBCoop.Mirror.Finishing) return;
+		return __original();
 	}
 });
