@@ -32,7 +32,7 @@
 	BusyTimeout = 12.0,     // host: a player counts as fighting this long after their last "busy"
 	SnapRunning = 2.0,      // drift (world seconds) allowed while our world runs
 	SnapPaused = 1.0,       // drift allowed while it is paused (the clock only moves forward then)
-	CalendarSlack = 4.0,    // calendar drift (world seconds) left alone
+	CalendarSlack = 6.0,    // calendar drift (world seconds) left alone
 	CatchUpMax = 8.0,       // fastest speed factor while behind the session's calendar
 	CatchUpMin = 0.1,       // slowest while ahead of it
 	CatchUpCheck = 15.0,    // real seconds between progress checks of a catch-up
@@ -246,13 +246,10 @@
 		{
 			local t = ::World.getTime();
 			local perDay = t.SecondsPerDay.tofloat();
-			local sec = 0.0;
-			if ("SecondsOfDay" in t) sec = t.SecondsOfDay.tofloat();
-			else
-			{
-				sec = t.Hours * t.SecondsPerHour.tofloat();
-				if ("Minutes" in t) sec += t.Minutes * t.SecondsPerHour.tofloat() / 60.0;
-			}
+			// v0.49.2: from Hours and Minutes (MSU reads both). v0.49.0 used SecondsOfDay first,
+			// and Touko's log showed whole days only (day 2 at 210 s in daylight), which made
+			// the catch-up push their world ahead.
+			local sec = (t.Hours * 60.0 + t.Minutes) * perDay / 1440.0;
 			return t.Days * perDay + sec;
 		}
 		catch (error) {}
@@ -425,7 +422,7 @@
 		else if (joiner) text += ", no session clock: " + (this.Remote == null ? "no world_time from the host yet" : format("last world_time %.0f s ago, host online %s", _now - this.Remote.Recv, "" + ::BBCoop.World.isHostOnline()));
 		local cal = this.getCalendar();
 		local calTarget = this.getCalendarTarget(_now);
-		if (cal != null) text += format("; calendar %.0f s", cal);
+		if (cal != null) text += format("; calendar %.0f s (day %i %i:%02i, time of day %i)", cal, t.Days, t.Hours, t.Minutes, t.TimeOfDay);
 		if (cal != null && calTarget != null) text += format(", session calendar %.0f s (drift %+.0f s)%s", calTarget, calTarget - cal, this.Catch != null ? ", catching up" : "");
 		if (_now < this.CatchOffUntil) text += format(", catching up off for %.0f s more", this.CatchOffUntil - _now);
 		::BBCoop.log(text);
