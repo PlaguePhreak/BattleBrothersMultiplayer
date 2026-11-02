@@ -36,6 +36,12 @@
 	CatchUpMax = 8.0,       // fastest speed factor while behind the session's calendar
 	CatchUpMin = 0.1,       // slowest while ahead of it
 	CatchUpCheck = 15.0,    // real seconds between progress checks of a catch-up
+	// v0.49.3: off. Aaron's and Touko's v0.49.2 logs show the calendar does not run at the speed
+	// set here (Touko's ran about 1x while the world was set to 4x) and the host's ran ahead while
+	// set to 0.1x, so the catch-up only made worlds oscillate. The clock test (Ctrl+Shift+T) finds
+	// out what does move the calendar.
+	CatchUpEnabled = false,
+	Probe = null,           // the clock test while it runs
 
 	// host
 	Clock = null,           // { T, Real, Speed } while someone is following our world
@@ -67,6 +73,7 @@
 		this.Catch = null;
 		this.CatchOffUntil = -1.0;
 		this.CatchStarts = [];
+		this.Probe = null;
 		this.PausedByHost = false;
 		this.SentSpeed = -1.0;
 	}
@@ -281,6 +288,7 @@
 	// below 1 while ahead of it
 	function getCatchUp( _now )
 	{
+		if (!this.CatchUpEnabled) return 1.0;
 		if (_now < this.CatchOffUntil) return 1.0;
 		local target = this.getCalendarTarget(_now);
 		local cal = target != null ? this.getCalendar() : null;
@@ -361,6 +369,7 @@
 	// Moves our world clock to the session's (world map only; a battle uses the clock itself)
 	function apply( _now )
 	{
+		if (this.Probe != null) return;
 		if (::BBCoop.Battle.isInTactical()) return;
 		try { if (::Tactical.isVisible()) return; } catch (error) {}
 		local target = this.getTarget(_now);
@@ -472,10 +481,74 @@
 		this.AutoPausedSince = null;
 	}
 
+	// ================= clock test (v0.49.3) =================
+	// Ctrl+Shift+T on the world map: a 20-second test of what moves the game's calendar (the day
+	// and hour it shows), written to the log. It moves your world about half a day ahead.
+
+	function startProbe()
+	{
+		if (!::BBCoop.Ghosts.isWorldActive() || ::BBCoop.Battle.isInTactical()) { ::BBCoop.notify("The clock test runs on the world map."); return; }
+		if (this.Probe != null) { ::BBCoop.notify("The clock test is already running."); return; }
+		this.Probe = { Step = 0, At = null, W = null, V = null, Speed = ::World.getSpeedMult(), Last = null, Count = 0 };
+		try { this.Probe.Last = ::World.State.m.LastWorldSpeedMult; } catch (error) {}
+		::BBCoop.notify("Clock test: unpause and let the world run for about 20 seconds. Results go to the log.");
+		::BBCoop.log(format("Clock test start: calendar %.1f s, virtual %.1f s, speed %.2f, vanilla speed %s", this.getCalendar(), ::Time.getVirtualTimeF(), ::World.getSpeedMult(), "" + this.Probe.Last));
+	}
+
+	function probeMark( _now )
+	{
+		this.Probe.At = _now;
+		this.Probe.W = this.getCalendar();
+		this.Probe.V = ::Time.getVirtualTimeF();
+	}
+
+	function probeReport( _now, _what )
+	{
+		local p = this.Probe;
+		::BBCoop.log(format("Clock test %s: over %.1f real s the calendar moved %+.1f s and the virtual time %+.1f s (speed %.2f, vanilla speed %s, calendar now day %i %i:%02i)",
+			_what, _now - p.At, this.getCalendar() - p.W, ::Time.getVirtualTimeF() - p.V, ::World.getSpeedMult(), "" + ::World.State.m.LastWorldSpeedMult,
+			::World.getTime().Days, ::World.getTime().Hours, ::World.getTime().Minutes));
+	}
+
+	// Called every world frame while the test runs; returns true while it holds the speed
+	function stepProbe( _now )
+	{
+		local p = this.Probe;
+		local state = ::World.State;
+		if (state.isPaused())
+		{
+			p.At = null; // the step starts over once the world runs
+			return true;
+		}
+		if (p.At == null) { this.probeMark(_now); if (p.Step == 1) ::Time.setVirtualTime(p.V + 30.0); if (p.Step == 2) ::Time.setVirtualTime(p.V - 30.0); return true; }
+		local held = _now - p.At;
+		if (p.Step == 3) ::World.setSpeedMult(4.0);
+		if (p.Step == 4) { state.m.LastWorldSpeedMult = 4.0; ::World.setSpeedMult(4.0); }
+		if (held < 3.0) return true;
+		local names = ["at the normal speed", "after a jump of the virtual time 30 s forward", "after a jump of the virtual time 30 s back", "with the world speed set to 4 (vanilla's own speed left alone)", "with vanilla's own speed set to 4 too"];
+		this.probeReport(_now, names[p.Step]);
+		if (p.Step == 4)
+		{
+			try { if (p.Last != null) state.m.LastWorldSpeedMult = p.Last; } catch (error) {}
+			::World.setSpeedMult(p.Speed > 0 ? p.Speed : this.normalSpeed());
+			this.Probe = null;
+			::BBCoop.notify("Clock test done: please send your log.");
+			return false;
+		}
+		p.Step++;
+		p.At = null;
+		return true;
+	}
+
 	// Every world frame, after vanilla set the speed: everyone moves at the session speed
 	function onWorldUpdate()
 	{
 		local now = ::Time.getRealTimeF();
+		if (this.Probe != null)
+		{
+			try { if (this.stepProbe(now)) return; }
+			catch (error) { ::BBCoop.log("Clock test failed: " + error); this.Probe = null; }
+		}
 		local joiner = ::BBCoop.World.getHost() != null;
 		if (joiner)
 		{

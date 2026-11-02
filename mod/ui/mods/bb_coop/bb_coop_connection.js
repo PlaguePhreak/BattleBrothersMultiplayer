@@ -82,6 +82,19 @@ BBCoopConnection.prototype.request = function (_method, _path, _body, _callback)
 	xhr.open(_method, this.mConfig.relayURL.replace(/\/+$/, '') + _path, true);
 	xhr.timeout = 10000;
 	xhr.ontimeout = function () { if (!done) { done = true; _callback(0, null); } };
+	// v0.49.3: the game's XMLHttpRequest does not always fire ontimeout. A poll that never came
+	// back stopped all incoming messages for good with nothing in the log (Aaron stopped hearing
+	// Touko: their company "left the map" and their newer company copy never reached his save).
+	// So every request gives up by itself after 15 seconds.
+	var self = this;
+	setTimeout(function ()
+	{
+		if (done) return;
+		done = true;
+		try { xhr.abort(); } catch (e) {}
+		if (_path.indexOf('/poll') === 0) self.log('Poll got no answer from the relay in 15 s, polling again');
+		_callback(0, null);
+	}, 15000);
 	// text/plain keeps this a "simple" request, so no CORS preflight is needed
 	if (_body !== null) xhr.setRequestHeader('Content-Type', 'text/plain');
 	xhr.send(_body !== null ? JSON.stringify(_body) : null);

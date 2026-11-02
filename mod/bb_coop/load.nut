@@ -241,6 +241,11 @@ foreach (state in ["scripts/states/world_state", "scripts/states/main_menu_state
 	return true;
 }, "Chat in battle", null, "Open the chat during a battle (plain Enter ends the turn there).");
 
+::BBCoop.Mod.Keybinds.addSQKeybind("ClockTest", "ctrl+shift+t", ::MSU.Key.State.World, function() {
+	::BBCoop.Time.startProbe();
+	return true;
+}, "Clock test", null, "A 20-second test of what moves the game's day and hour, written to the log (moves your world about half a day ahead).");
+
 ::BBCoop.Mod.Keybinds.addSQKeybind("ShareContract", "ctrl+o", ::MSU.Key.State.World, function() {
 	::BBCoop.Contract.share(false);
 	return true;
