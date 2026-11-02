@@ -114,7 +114,7 @@
 		{
 			try
 			{
-				c.bros.push({ name = bro.getName(), raw = ::BBCoop.Roster.serializeBrother(bro), look = ::BBCoop.Roster.captureAppearance(bro) });
+				c.bros.push({ name = ::BBCoop.Roster.nameOf(bro), raw = ::BBCoop.Roster.serializeBrother(bro), look = ::BBCoop.Roster.captureAppearance(bro) });
 			}
 			catch (error)
 			{
@@ -299,7 +299,7 @@
 				bro = roster.create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				::BBCoop.Roster.applyAppearance(bro, entry.look);
-				bro.setName(entry.name);
+				::BBCoop.Roster.setCopiedName(bro, entry.name);
 				back++;
 			}
 			catch (error)

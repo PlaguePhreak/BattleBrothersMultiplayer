@@ -233,7 +233,7 @@
 				local bro = ::World.getTemporaryRoster().create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				if ("look" in entry) ::BBCoop.Roster.applyAppearance(bro, entry.look);
-				bro.setName(entry.name);
+				::BBCoop.Roster.setCopiedName(bro, entry.name);
 				bro.getFlags().set("BBCoopOwner", _owner);
 				bro.getFlags().set("BBCoopKey", entry.key);
 				// Guests are player-controlled but stay out of our roster, obituary, score and result screen

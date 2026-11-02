@@ -292,7 +292,7 @@
 			faction = _e.getFaction();
 			if (faction == ::Const.Faction.Player || faction == ::Const.Faction.PlayerAnimals) faction = ::Const.Faction.Bandits;
 		}
-		local d = { name = _e.getName(), faction = faction, player = false };
+		local d = { name = ::BBCoop.Roster.nameOf(_e), faction = faction, player = false };
 		if (::isKindOf(_e, "player"))
 		{
 			d.player = true;
@@ -642,7 +642,7 @@
 			this.Created.push(::WeakTableRef(e));
 			::BBCoop.Roster.deserializeInto(e, _d.raw);
 			::BBCoop.Roster.applyAppearance(e, _d.look);
-			e.setName(_d.name);
+			::BBCoop.Roster.setCopiedName(e, _d.name);
 			e.setGuest(true);
 			e.setFaction(_d.faction.tointeger());
 			::Tactical.addEntityToMap(e, tile.Coords.X, tile.Coords.Y);
@@ -665,7 +665,7 @@
 				::BBCoop.log("Could not dress " + _d.name + ": " + error);
 			}
 			::BBCoop.Roster.applyAppearance(e, _d.look, false);
-			e.setName(_d.name);
+			::BBCoop.Roster.setCopiedName(e, _d.name);
 		}
 		e.getFlags().set("BBCoopMirrorID", _u.id);
 		this.Units[_u.id] <- ::WeakTableRef(e);

@@ -112,6 +112,29 @@
 		try { _to.setDirty(true); } catch (error) {}
 	}
 
+	// A copied brother's name without his title: vanilla getName() is "Name Title", and the raw
+	// data restores the title on its own, so setName(getName()) doubled it at every copy
+	// ("Rupert the Hound the Hound the Hound", v0.46.2)
+	function nameOf( _bro )
+	{
+		try { return _bro.getNameOnly(); } catch (error) {}
+		return _bro.getName();
+	}
+
+	// Names stored by older builds carry the title once or more: strip it before setting
+	function setCopiedName( _bro, _name )
+	{
+		local title = "";
+		try { title = _bro.getTitle(); } catch (error) {}
+		if (title != null && title != "")
+		{
+			local tail = " " + title;
+			while (_name.len() > tail.len() && _name.slice(_name.len() - tail.len()) == tail)
+				_name = _name.slice(0, _name.len() - tail.len());
+		}
+		_bro.setName(_name);
+	}
+
 	function serializeBrother( _bro )
 	{
 		local sd = ::MSU.Class.SerializationData();
@@ -188,7 +211,7 @@
 			{
 				bro = roster.create("scripts/entity/tactical/player");
 				bro.setStartValuesEx(origin.backgrounds);
-				bros.push({ key = "bot_" + i, name = bro.getName(), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
+				bros.push({ key = "bot_" + i, name = this.nameOf(bro), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
 			}
 			catch (error)
 			{
@@ -209,7 +232,7 @@
 			local key = _keyPrefix + "_" + i;
 			try
 			{
-				bros.push({ key = key, name = bro.getName(), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
+				bros.push({ key = key, name = this.nameOf(bro), raw = this.serializeBrother(bro), look = this.captureAppearance(bro) });
 				refs[key] <- ::WeakTableRef(bro);
 			}
 			catch (error)
