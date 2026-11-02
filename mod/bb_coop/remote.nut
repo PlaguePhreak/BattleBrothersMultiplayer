@@ -444,7 +444,7 @@
 
 ::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
 	// The inventory button / "I" opens the character screen for the acting brother, where gear can be
-	// swapped. v0.43.5: in a shared battle that only changes the local game (the host swapped a
+	// swapped. v0.45.0: in a shared battle that only changes the local game (the host swapped a
 	// guest's weapons and only he saw it), so another player's brother, and every brother in a copied
 	// battle, keep their gear until the fight is over. Checked against vanilla showCharacterScreen
 	// (_forced = true is the battle preparation screen, which stays as it is).
