@@ -16,6 +16,15 @@
 // Checked against vanilla world_state (startNewCampaign/onCombatFinished use
 // Time.setVirtualTime; onUpdate re-applies LastWorldSpeedMult every frame; getCombatStartTime),
 // asset_manager (consumeFood uses the virtual-time delta; LastDayPaid) and food_item (BestBefore).
+//
+// The calendar (v0.49.0): Aaron and Touko ended up on different days (day 5 and day 2, one in the
+// morning while the other had night) although both worlds had the same virtual time. The
+// day/hour the game shows does not follow Time.setVirtualTime: a joiner who jumped 193 seconds to
+// the host's time still read day 1, and a joiner whose world kept running while the host fought
+// got days ahead. So the session clock now also carries the host's calendar (day and hour in world
+// seconds), and every game, the host's included, runs its world faster (up to 8x) while it is
+// behind that calendar and slower (down to 0.1x) while it is ahead, until they meet. If the
+// calendar does not come closer that way, the catch-up is dropped for five minutes and logged.
 
 ::BBCoop.Time <- {
 	SendSeconds = 1.0,      // host: how often the clock goes out
@@ -23,6 +32,10 @@
 	BusyTimeout = 12.0,     // host: a player counts as fighting this long after their last "busy"
 	SnapRunning = 2.0,      // drift (world seconds) allowed while our world runs
 	SnapPaused = 1.0,       // drift allowed while it is paused (the clock only moves forward then)
+	CalendarSlack = 4.0,    // calendar drift (world seconds) left alone
+	CatchUpMax = 8.0,       // fastest speed factor while behind the session's calendar
+	CatchUpMin = 0.1,       // slowest while ahead of it
+	CatchUpCheck = 15.0,    // real seconds between progress checks of a catch-up
 
 	// host
 	Clock = null,           // { T, Real, Speed } while someone is following our world
@@ -38,6 +51,9 @@
 
 	// both
 	WasBusy = false,
+	Catch = null,           // { Since, Drift, Started } while our calendar catches up with the session's
+	CatchOffUntil = -1.0,   // real time until which catching up is off (it made no progress)
+	CatchStarts = [],       // real times catch-ups finished, to stop one that keeps coming back
 	LastBusySent = -100.0,
 
 	function reset()
@@ -48,6 +64,9 @@
 		this.LastFightingText = "";
 		this.Arrived = false;
 		this.WasBusy = false;
+		this.Catch = null;
+		this.CatchOffUntil = -1.0;
+		this.CatchStarts = [];
 		this.PausedByHost = false;
 		this.SentSpeed = -1.0;
 	}
@@ -117,12 +136,14 @@
 		local fighters = this.getFighters();
 		if (this.Clock == null)
 		{
-			this.Clock = { T = this.getWorldTime(), Real = _now, Speed = this.normalSpeed() };
+			this.Clock = { T = this.getWorldTime(), C = this.getCalendar(), Real = _now, Speed = this.normalSpeed() };
 			::BBCoop.log("Session clock started at day " + ::World.getTime().Days);
 		}
 		else
 		{
 			this.Clock.T += (_now - this.Clock.Real) * this.Clock.Speed;
+			if (this.Clock.C != null) this.Clock.C += (_now - this.Clock.Real) * this.Clock.Speed;
+			else this.Clock.C = this.getCalendar();
 			this.Clock.Real = _now;
 		}
 		if (this.isHostPaused()) this.Clock.Speed = 0.0;
@@ -133,7 +154,9 @@
 		{
 			this.LastSent = _now;
 			this.SentSpeed = this.Clock.Speed;
-			::BBCoop.Connection.sendMessage("world_time", { t = this.Clock.T, sp = this.Clock.Speed, f = fighters });
+			local msg = { t = this.Clock.T, sp = this.Clock.Speed, f = fighters };
+			if (this.Clock.C != null) msg.c <- this.Clock.C;
+			::BBCoop.Connection.sendMessage("world_time", msg);
 		}
 	}
 
@@ -155,7 +178,7 @@
 	function onTime( _from, _payload )
 	{
 		if (!::BBCoop.World.isFromHost(_from)) return;
-		this.Remote = { T = _payload.t.tofloat(), Recv = ::Time.getRealTimeF(), Speed = _payload.sp.tofloat(), From = _from };
+		this.Remote = { T = _payload.t.tofloat(), C = ("c" in _payload) ? _payload.c.tofloat() : null, Recv = ::Time.getRealTimeF(), Speed = _payload.sp.tofloat(), From = _from };
 		this.showFighters(_payload.f);
 		this.followHostPause();
 	}
@@ -214,6 +237,110 @@
 		return this.Clock != null ? this.Clock.Speed : null;
 	}
 
+	// ================= calendar (v0.49.0) =================
+
+	// Our world's day and hour as world seconds since day 0, or null if the game won't say
+	function getCalendar()
+	{
+		try
+		{
+			local t = ::World.getTime();
+			local perDay = t.SecondsPerDay.tofloat();
+			local sec = 0.0;
+			if ("SecondsOfDay" in t) sec = t.SecondsOfDay.tofloat();
+			else
+			{
+				sec = t.Hours * t.SecondsPerHour.tofloat();
+				if ("Minutes" in t) sec += t.Minutes * t.SecondsPerHour.tofloat() / 60.0;
+			}
+			return t.Days * perDay + sec;
+		}
+		catch (error) {}
+		return null;
+	}
+
+	// The session's calendar right now, or null
+	function getCalendarTarget( _now )
+	{
+		if (!::BBCoop.Ghosts.isWorldActive()) return null;
+		if (::BBCoop.World.getHost() != null)
+		{
+			if (this.getJoinerTarget(_now) == null || this.Remote.C == null) return null;
+			return this.Remote.C + (_now - this.Remote.Recv) * this.Remote.Speed;
+		}
+		if (this.Clock == null || this.Clock.C == null) return null;
+		return this.Clock.C + (_now - this.Clock.Real) * this.Clock.Speed;
+	}
+
+	function describeDrift( _drift )
+	{
+		local days = _drift / ::World.getTime().SecondsPerDay;
+		local size = days < 0 ? -days : days;
+		if (size >= 1.0) return format("%.1f days", size);
+		return format("%.0f hours", size * 24.0);
+	}
+
+	// Speed factor for our world this frame: above 1 while behind the session's calendar,
+	// below 1 while ahead of it
+	function getCatchUp( _now )
+	{
+		if (_now < this.CatchOffUntil) return 1.0;
+		local target = this.getCalendarTarget(_now);
+		local cal = target != null ? this.getCalendar() : null;
+		if (target == null || cal == null)
+		{
+			this.Catch = null;
+			return 1.0;
+		}
+		local drift = target - cal;
+		local size = drift < 0 ? -drift : drift;
+		if (size <= this.CalendarSlack)
+		{
+			if (this.Catch != null)
+			{
+				::BBCoop.log(format("Calendar caught up with the session's after %.0f s (day %i)", _now - this.Catch.Started, ::World.getTime().Days));
+				// Caught up again and again within a minute: something (like the time jumps) keeps
+				// pushing it away, so stop fighting it for a while
+				local recent = [];
+				foreach (t in this.CatchStarts) if (_now - t < 60.0) recent.push(t);
+				recent.push(_now);
+				this.CatchStarts = recent;
+				if (recent.len() > 3)
+				{
+					::BBCoop.log("The calendar keeps drifting away from the session's; catching up is off for 5 minutes.");
+					this.CatchOffUntil = _now + 300.0;
+					this.CatchStarts = [];
+				}
+			}
+			this.Catch = null;
+			return 1.0;
+		}
+		if (this.Catch == null)
+		{
+			this.Catch = { Since = _now, Drift = size, Started = _now };
+			::BBCoop.log(format("Calendar is %s the session's: day %i, the session is on day %i (%+.0f s); %s the world until they meet",
+				drift > 0 ? "behind" : "ahead of", ::World.getTime().Days, (target / ::World.getTime().SecondsPerDay).tointeger(), drift, drift > 0 ? "speeding up" : "slowing down"));
+			if (size >= ::World.getTime().SecondsPerDay * 0.25)
+				::BBCoop.notify("Your world is " + this.describeDrift(drift) + (drift > 0 ? " behind" : " ahead of") + " the shared day: it runs " + (drift > 0 ? "faster" : "slower") + " until it matches.");
+		}
+		else if (_now - this.Catch.Since >= this.CatchUpCheck)
+		{
+			if (size > this.Catch.Drift - 1.0)
+			{
+				::BBCoop.log(format("Calendar is not getting closer to the session's (%+.0f s); catching up is off for 5 minutes.", drift));
+				this.CatchOffUntil = _now + 300.0;
+				this.Catch = null;
+				return 1.0;
+			}
+			this.Catch.Since = _now;
+			this.Catch.Drift = size;
+		}
+		local f = 1.0 + drift / 10.0;
+		if (f > this.CatchUpMax) f = this.CatchUpMax;
+		if (f < this.CatchUpMin) f = this.CatchUpMin;
+		return f;
+	}
+
 	// First jump to the host's day after joining: the trip there costs no food, nothing spoils
 	// and no wages are due for the days skipped
 	function arrive( _jump )
@@ -247,10 +374,12 @@
 		local paused = false;
 		try { paused = ::World.State.isPaused(); } catch (error) {}
 		if (paused ? drift <= this.SnapPaused : size <= this.SnapRunning) return;
+		if (this.Catch != null) return; // the calendar is being caught up by speed; a jump would fight it
 
 		local joiner = ::BBCoop.World.getHost() != null;
 		local big = size > ::World.getTime().SecondsPerDay * 0.25;
 		::Time.setVirtualTime(target);
+		if (big && ::Time.getVirtualTimeF() + 1.0 < target) ::BBCoop.log(format("World time did not move: set %.0f s, it reads %.0f s", target, ::Time.getVirtualTimeF()));
 		if (joiner && !this.Arrived)
 		{
 			this.Arrived = true;
@@ -274,6 +403,32 @@
 		if (::BBCoop.World.getHost() != null) this.sendBusy(now);
 		else this.updateHost(now);
 		this.apply(now);
+		try { this.logState(now); } catch (error) {}
+	}
+
+	// v0.48.1/v0.49.0: a line every 30 seconds with where our world's clock and calendar stand against the session's,
+	// to trace day/night differences between players (Aaron day 5, Touko day 2)
+	LastStateLog = -100.0,
+	function logState( _now )
+	{
+		if (_now - this.LastStateLog < 30.0) return;
+		this.LastStateLog = _now;
+		local joiner = ::BBCoop.World.getHost() != null;
+		local t = ::World.getTime();
+		local day = ::World.getTime().SecondsPerDay;
+		local current = ::Time.getVirtualTimeF();
+		local target = this.getTarget(_now);
+		local text = format("Clock (%s): world day %i %s (%.0f s), speed %.2f, paused %s, tactical %s",
+			joiner ? "joiner of " + ::BBCoop.World.getHost() : (this.Clock != null ? "host" : "solo"),
+			t.Days, t.IsDaytime ? "daytime" : "night", current, ::World.getSpeedMult(), "" + ::World.State.isPaused(), "" + ::BBCoop.Battle.isInTactical());
+		if (target != null) text += format(", session %.0f s (drift %+.0f s = %+.2f days)", target, target - current, (target - current) / day);
+		else if (joiner) text += ", no session clock: " + (this.Remote == null ? "no world_time from the host yet" : format("last world_time %.0f s ago, host online %s", _now - this.Remote.Recv, "" + ::BBCoop.World.isHostOnline()));
+		local cal = this.getCalendar();
+		local calTarget = this.getCalendarTarget(_now);
+		if (cal != null) text += format("; calendar %.0f s", cal);
+		if (cal != null && calTarget != null) text += format(", session calendar %.0f s (drift %+.0f s)%s", calTarget, calTarget - cal, this.Catch != null ? ", catching up" : "");
+		if (_now < this.CatchOffUntil) text += format(", catching up off for %.0f s more", this.CatchOffUntil - _now);
+		::BBCoop.log(text);
 	}
 
 	// Joiner: pause while the host is paused, unpause when the host does (only if we paused)
@@ -334,7 +489,12 @@
 		local speed = this.getSpeed();
 		if (speed == null || speed <= 0) return;
 		if (joiner && this.getJoinerTarget(now) == null) return;
-		if (::World.State.isPaused()) return;
+		if (::World.State.isPaused())
+		{
+			this.Catch = null; // a paused world can't catch up; start counting again when it runs
+			return;
+		}
+		try { speed *= this.getCatchUp(now); } catch (error) { ::BBCoop.log("Calendar catch-up failed: " + error); this.CatchOffUntil = now + 300.0; }
 		if (::World.getSpeedMult() != speed) ::World.setSpeedMult(speed);
 	}
 };
