@@ -30,6 +30,7 @@
 	WipeAsked = null,       // when the "start over or leave" choice was last shown (v0.43.0)
 	Leaving = false,        // the player chose to leave after a wipe-out: vanilla's defeat screen is showing
 	KickedBy = null,        // the host reset our company: back to the main menu on the next world frame
+	HostEnding = false,     // host: chose to end the campaign after a wipe-out, vanilla's defeat screen may show (v0.48.0)
 
 	function myName()
 	{
@@ -373,10 +374,34 @@
 		this.onWipedOut("Every brother of yours is dead.");
 	}
 
+	// A world we host as a co-op save (v0.48.0: the host may start over too)
+	function isHostWorld()
+	{
+		if (this.joinedHost() != null) return false;
+		try { return ::World.Flags.has("BBCoopSave"); } catch (error) {}
+		return false;
+	}
+
 	function onWipedOut( _why )
 	{
 		local host = this.joinedHost();
-		if (host == null || this.Leaving) return;
+		if (this.Leaving || this.HostEnding) return;
+		if (host == null)
+		{
+			if (!this.isHostWorld()) return;
+			this.WipeAsked = ::Time.getRealTimeF();
+			::BBCoop.log("Host company wiped out: " + _why);
+			::BBCoop.Connection.showPrompt({
+				id = "wipe",
+				title = "Your company is gone",
+				text = _why + " Start a new company in this same world (your origin's starting brothers, starting crowns and supplies, an empty stash); the save, the map and the other players' companies carry on. Or end the campaign as the game normally would.",
+				options = [
+					{ id = "new", label = "Start a new company" },
+					{ id = "end", label = "End the campaign" }
+				]
+			});
+			return;
+		}
 		this.WipeAsked = ::Time.getRealTimeF();
 		::BBCoop.log("Company wiped out: " + _why);
 		::BBCoop.Connection.showPrompt({
@@ -395,17 +420,38 @@
 		if (_id != "wipe") return;
 		if (_choice == "new") this.startNewCompany();
 		else if (_choice == "leave") this.leaveAfterWipe();
+		else if (_choice == "end") this.endAfterWipe();
 	}
 
-	// vanilla world_state.showGameFinishScreen(false) in a joined world: offer the choice instead
+	// vanilla world_state.showGameFinishScreen(false) in a joined world, or in a co-op world we host
+	// (v0.48.0): offer the choice instead. Vanilla onUpdate calls it every frame while the roster is
+	// empty, so the window is shown again only every 20 seconds (if it was closed).
 	function interceptDefeat()
 	{
-		if (this.Leaving || this.joinedHost() == null) return false;
-		if (this.KickedBy != null) return false;
+		if (this.Leaving || this.HostEnding || this.KickedBy != null) return false;
+		if (this.joinedHost() == null && !this.isHostWorld()) return false;
+		try { if (!::World.State.m.IsGamePaused) ::World.State.setPause(true); } catch (error) {}
+		local now = ::Time.getRealTimeF();
+		if (this.WipeAsked != null && now - this.WipeAsked < 20.0) return true;
 		try { ::World.State.setWorldmapMusic(true); } catch (error) {}
-		try { ::World.State.setPause(true); } catch (error) {}
-		this.onWipedOut("Every brother of yours is dead.");
+		local why = "Every brother of yours is dead.";
+		try { if (::World.getPlayerRoster().getSize() != 0) why = "Your company's leader has fallen."; } catch (error) {}
+		this.onWipedOut(why);
 		return true;
+	}
+
+	// Host: the campaign ends as vanilla would end it (defeat screen, then the main menu)
+	function endAfterWipe()
+	{
+		this.HostEnding = true;
+		this.WipeAsked = null;
+		::BBCoop.log("The host ends the campaign after the wipe-out.");
+		try { ::World.State.showGameFinishScreen(false); }
+		catch (error)
+		{
+			::BBCoop.log("Could not show the defeat screen: " + error);
+			try { ::World.State.exitGame(); } catch (e2) {}
+		}
 	}
 
 	// The origin's starting company again, as a new campaign gets it (asset_manager.setCampaignSettings
@@ -454,6 +500,12 @@
 		this.Ready = true;
 		this.Blocked = false;
 		this.LastSent = 0.0;
+		try { ::World.State.setPause(false); } catch (error) {}
+		if (this.joinedHost() == null)
+		{
+			::BBCoop.notify(format("A new company: %i brothers and %i crowns. The world, its save and everyone else's companies go on.", roster.getSize(), assets.getMoney()));
+			return;
+		}
 		::BBCoop.notify(format("A new company: %i brothers and %i crowns. It replaces the old one in %s's save.", roster.getSize(), assets.getMoney(), this.joinedHost()));
 		this.send("new company");
 	}
@@ -659,6 +711,7 @@
 		this.WipeAsked = null;
 		this.Leaving = false;
 		this.KickedBy = null;
+		this.HostEnding = false;
 	}
 };
 
