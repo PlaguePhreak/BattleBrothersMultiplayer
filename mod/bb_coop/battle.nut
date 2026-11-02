@@ -33,6 +33,42 @@
 		return ::MSU.Utils.hasState("tactical_state");
 	}
 
+	// v0.49.1: no world event (like the "During camp" ambition choice) may open while our company
+	// is on its way into, or fighting in, someone else's battle. One that opened as Touko joined
+	// Aaron's battle sat over the battlefield and locked the game.
+	function blocksEvents()
+	{
+		if (this.PendingRefs != null) return true;
+		if (::BBCoop.Mirror.Active || ::BBCoop.Mirror.Scene != null) return true;
+		return this.isInTactical();
+	}
+
+	// Closes a world event screen that is open or opening (and forgets its event) before we go
+	// into a joined battle. An ambition choice comes back by itself later.
+	function closeWorldEvent()
+	{
+		local state = ::World.State;
+		local open = false;
+		try { open = state.m.EventScreen.isVisible() || state.m.EventScreen.isAnimating(); } catch (error) {}
+		local id = null;
+		try { if (::World.Events.m.ActiveEvent != null) id = ::World.Events.m.ActiveEvent.getID(); } catch (error) {}
+		if (!open && id == null) return;
+		::BBCoop.log("Closing the event " + (id != null ? id : "screen") + " before going into the battle.");
+		if (open)
+		{
+			try { state.m.MenuStack.pop(); } catch (error) { ::BBCoop.log("Closing the event screen failed: " + error); }
+			try { if (state.m.EventScreen.isVisible()) state.m.EventScreen.hide(); } catch (error) {}
+		}
+		try
+		{
+			if (::World.Events.m.ActiveEvent != null) ::World.Events.m.ActiveEvent.clear();
+			::World.Events.m.ActiveEvent = null;
+			::World.Events.m.IsEventShown = false;
+		}
+		catch (error) {}
+		try { if (state.m.IsGameAutoPaused) state.setAutoPause(false); } catch (error) {}
+	}
+
 	// ================= host =================
 
 	function onBattleStarted()
@@ -673,6 +709,7 @@
 		::BBCoop.Connection.sendMessage("battle_join", { battleID = this.Invite.battleID, to = this.Invite.host, bros = packed.bros, side = _side, mirror = ::BBCoop.Mirror.isEnabled() });
 		this.Invite = null;
 		try { ::World.State.setPause(true); } catch (error) {}
+		try { this.closeWorldEvent(); } catch (error) {}
 		if (_side == "enemy")
 			::BBCoop.notify(format("Your company attacks %s! Results arrive when the battle ends.", this.PendingHost));
 		else

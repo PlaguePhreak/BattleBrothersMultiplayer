@@ -812,6 +812,9 @@
 				try { if (::World.State.m.IsGameAutoPaused) ::World.State.setAutoPause(false); } catch (e2) {}
 				return false;
 			}
+			// v0.49.1: not while our company heads into or fights in someone else's battle;
+			// the event (an ambition choice, say) tries again once we are back
+			if (::BBCoop.Battle.blocksEvents()) return false;
 		}
 		catch (error) {}
 		return __original(_id, _update);

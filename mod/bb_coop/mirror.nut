@@ -472,6 +472,7 @@
 		if (this.View != null && this.View.battleID == this.BattleID) this.collectSpawns(this.View);
 		::BBCoop.Connection.setBattleMirror(true, false);
 		::BBCoop.log("Building " + _from + "'s battlefield (" + setup.terrain + ", seed " + setup.seed + ")");
+		try { battle.closeWorldEvent(); } catch (error) {}
 		try
 		{
 			::World.State.startScriptedCombat(properties, false, false, false);
