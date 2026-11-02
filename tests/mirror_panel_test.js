@@ -41,11 +41,14 @@ check(!screen.mBattlePanel && screen.mMirror === true, 'scene: the panel closes'
 screen.handleBattleMessage({ from: 'Aaron', type: 'battle_view', payload: view(turn) });
 check(!screen.mBattlePanel, 'real battlefield: no panel on our turn');
 
-// fallback: panel only for our turns
+// no panel ever while mirrored, not even when the game reports trouble; the action strip instead
 screen.setBattleMirror({ on: true, fallback: true });
-check(!!screen.mBattlePanel, 'fallback: panel shows for our pending turn');
-screen.handleBattleMessage({ from: 'Aaron', type: 'battle_view', payload: view(null) });
-check(screen.mBattleHidden === true, 'fallback: panel hides on other turns');
+check(!screen.mBattlePanel, 'mirrored: the panel never comes back');
+screen.setMirrorTurn({ turn: turn, busy: false, selected: null });
+check(!!screen.mMirrorStrip, 'our turn off the turn bar: action strip shows');
+screen.setMirrorTurn(null);
+check(!screen.mMirrorStrip, 'action strip goes away');
+screen.setMirrorTurn({ turn: turn, busy: false, selected: null });
 
 // order errors reach the game
 toSQ.length = 0;
@@ -57,6 +60,13 @@ screen.handleBattleMessage({ from: 'Aaron', type: 'battle_result', payload: { to
 screen.setBattleMirror({ on: false, fallback: false });
 screen.handleBattleMessage({ from: 'Aaron', type: 'battle_view', payload: view(null) });
 check(!screen.mBattlePanel, 'after the result the panel stays closed');
+check(!screen.mMirrorStrip, 'after the result the action strip is gone');
+
+// turn notice in the top right
+screen.setTurnNotice("It's your turn");
+check(!!screen.mTurnNotice, 'turn notice shows');
+screen.setTurnNotice(null);
+check(!screen.mTurnNotice, 'turn notice goes away');
 
 console.log(failed ? 'FAILED: ' + failed : 'PASS');
 process.exit(failed ? 1 : 0);

@@ -6,6 +6,12 @@
 //   helper -> "contract_leave" -> owner      (helping someone else now)
 //   owner  -> "contract_pay"   -> helper     (their share of a payment)
 //   owner  -> "contract_done"  -> helper     (finished or broken)
+//   owner  -> "contract_track" -> helper     (what the owner's contract panel shows, v0.22.0)
+// Contract tracker (v0.22.0): helpers see the owner's active-contract panel (top right of the
+// world map) with the same title, objectives and payment lines, plus who took it and how many
+// ways payments are split. The owner sends it whenever vanilla refreshes its own panel
+// (contract_manager.updateActiveContract, called from contract.setState), when a helper joins,
+// when the lines change and every 15 seconds. A helper's own active contract always wins the panel.
 // Payments are found by watching asset_manager.addMoney while a contract screen option runs
 // (contract.processInput), which is where every vanilla contract pays out.
 // Escorts (v0.19.0): while the owner's company is tied to a caravan (vanilla escort contracts
@@ -23,6 +29,12 @@
 	Escorts = {},        // player -> { id, pos, time } while their company travels with a caravan
 	Following = null,    // owner whose caravan we are moved with, or null
 	EscortRadius = 45.0, // how far from the owner's company a helper rides
+	TrackerSent = "",    // owner: what the helpers' panel showed last time we sent it
+	TrackerTime = 0.0,   // owner: when we last sent it
+	TrackerCheck = 0.0,  // last time updateTracker did its work
+	TrackerResend = 15.0,
+	Tracker = null,      // helper: { owner, data } last panel the owner sent us
+	TrackerShown = false,// helper: the panel shows the owner's contract right now
 
 	function keysOf( _table )
 	{
@@ -158,6 +170,7 @@
 		if (helpers.find(_from) == null) helpers.push(_from);
 		this.setHelpers(contract, helpers);
 		::BBCoop.notify(_from + " is helping with " + title + ". Payments are now split " + (helpers.len() + 1) + " ways.");
+		this.sendTracker();
 	}
 
 	function onLeave( _from, _payload )
@@ -170,6 +183,7 @@
 		helpers.remove(i);
 		this.setHelpers(contract, helpers);
 		::BBCoop.notify(_from + " stopped helping with " + this.plain(contract.getTitle()) + ".");
+		this.sendTracker(); // the split changed
 	}
 
 	// After a contract option ran: hand each online helper their share of what it paid
@@ -224,6 +238,178 @@
 		try { e = ::World.State.getEscortedEntity(); } catch (error) { return ""; }
 		if (e == null || e.isNull() || !e.isAlive()) return "";
 		return this.getContractID(contract);
+	}
+
+	// ---- contract tracker: owner ----
+
+	// The lines vanilla's own active-contract panel shows (world_active_contract_panel_module.convertToUI)
+	function buildTracker( _contract )
+	{
+		local lists = [];
+		try
+		{
+			foreach (section in _contract.getUIBulletpoints())
+			{
+				local items = [];
+				foreach (item in section.items) items.push({ icon = item.icon, text = item.text });
+				lists.push({ title = section.title, items = items, fixed = true });
+			}
+		}
+		catch (error) {}
+		return { id = this.getContractID(_contract), title = _contract.getTitle(), lists = lists, helpers = this.getHelpers(_contract).len() };
+	}
+
+	function trackerSignature( _t )
+	{
+		local ret = _t.title + "#" + _t.helpers;
+		foreach (section in _t.lists)
+		{
+			ret += "|" + section.title;
+			foreach (item in section.items) ret += "/" + item.text;
+		}
+		return ret;
+	}
+
+	// Send our contract's panel to every online helper. _force: even if nothing changed.
+	function sendTracker( _force = true )
+	{
+		local contract = this.getActive();
+		if (contract == null) return;
+		local helpers = this.getHelpers(contract);
+		if (helpers.len() == 0) return;
+		local t = this.buildTracker(contract);
+		local sig = this.trackerSignature(t);
+		local now = ::Time.getRealTimeF();
+		if (!_force && sig == this.TrackerSent && now - this.TrackerTime < this.TrackerResend) return;
+		this.TrackerSent = sig;
+		this.TrackerTime = now;
+		foreach (name in helpers)
+		{
+			if (!::BBCoop.isOnline(name, 60.0)) continue;
+			local payload = clone t;
+			payload.to <- name;
+			::BBCoop.Connection.sendMessage("contract_track", payload);
+		}
+	}
+
+	// ---- contract tracker: helper ----
+
+	function getPanel()
+	{
+		local screen = ::World.State.getWorldScreen();
+		if (screen == null) return null;
+		return screen.getActiveContractPanelModule();
+	}
+
+	function hasOwnContract()
+	{
+		return this.getActive() != null;
+	}
+
+	function onTrack( _from, _payload )
+	{
+		if (!::MSU.Utils.hasState("world_state")) return; // still setting up the campaign (v0.43.0)
+		local h = this.getHelping();
+		if (h == null || h.owner != _from || h.id != _payload.id) return;
+		local old = this.Tracker;
+		this.Tracker = { owner = _from, data = _payload };
+		// tell the helper when the objectives move on (the panel alone is easy to miss)
+		if (old != null && old.data.id == _payload.id)
+		{
+			local before = this.objectivesOf(old.data), after = this.objectivesOf(_payload);
+			if (after != "" && after != before) ::BBCoop.notify(_from + "'s contract: " + after);
+		}
+		this.showTracker();
+	}
+
+	function objectivesOf( _data )
+	{
+		foreach (section in _data.lists)
+		{
+			if (section.title != "Objectives") continue;
+			local ret = "";
+			foreach (item in section.items) ret += (ret == "" ? "" : " ") + this.plain(item.text);
+			return ret;
+		}
+		return "";
+	}
+
+	function getTrackerUI()
+	{
+		local d = this.Tracker.data;
+		local lists = [];
+		foreach (section in d.lists) lists.push(section);
+		local ways = d.helpers.tointeger() + 1;
+		lists.push({
+			title = "Shared contract",
+			fixed = true,
+			items = [
+				{ icon = "ui/icons/asset_brothers.png", text = "Taken by [color=" + ::Const.UI.Color.PositiveValue + "]" + this.Tracker.owner + "[/color], you are helping" },
+				{ icon = "ui/icons/money.png", text = "Payments after joining are split [color=" + ::Const.UI.Color.PositiveValue + "]" + ways + "[/color] ways" }
+			]
+		});
+		return { Title = d.title, Lists = lists };
+	}
+
+	// Put the owner's contract into our panel, unless we have a contract of our own
+	function showTracker()
+	{
+		if (this.Tracker == null || this.hasOwnContract() || ::BBCoop.Battle.isInTactical()) return;
+		local h = this.getHelping();
+		if (h == null || h.owner != this.Tracker.owner || h.id != this.Tracker.data.id)
+		{
+			this.clearTracker();
+			return;
+		}
+		local panel = this.getPanel();
+		if (panel == null) return;
+		panel.m.JSHandle.asyncCall("loadFromData", this.getTrackerUI()); // also shows the panel
+		this.TrackerShown = true;
+	}
+
+	function clearTracker()
+	{
+		this.Tracker = null;
+		if (!this.TrackerShown) return;
+		this.TrackerShown = false;
+		if (this.hasOwnContract()) return; // the panel shows our own contract now
+		try
+		{
+			local panel = this.getPanel();
+			if (panel != null) panel.clearContract();
+		}
+		catch (error) {}
+	}
+
+	// Called every frame from world_state.onUpdate; does its work every 2 seconds
+	function updateTracker()
+	{
+		local now = ::Time.getRealTimeF();
+		if (now - this.TrackerCheck < 2.0) return;
+		this.TrackerCheck = now;
+		if (!::BBCoop.Ghosts.isWorldActive()) return;
+		this.sendTracker(false);
+		if (this.Tracker != null && !this.TrackerShown) this.showTracker();
+	}
+
+	// Clicking the panel: vanilla offers to cancel our own contract; a helper is offered to stop helping
+	function onPanelClicked()
+	{
+		local h = this.getHelping();
+		if (h == null) return false;
+		::World.State.showDialogPopup("Stop Helping", "Stop helping " + h.owner + " with " + this.plain(h.title) + "? You no longer get a share of its payments.", this.stopHelping.bindenv(this), null);
+		return true;
+	}
+
+	function stopHelping()
+	{
+		local h = this.getHelping();
+		if (h == null) return;
+		::BBCoop.Connection.sendMessage("contract_leave", { to = h.owner, id = h.id });
+		this.setHelping("", "", "");
+		if (this.Following != null) this.stopFollowing(true);
+		this.clearTracker();
+		::BBCoop.notify("You stopped helping " + h.owner + " with " + this.plain(h.title) + ".");
 	}
 
 	// ---- helper ----
@@ -289,6 +475,7 @@
 			if (h != null && (h.owner != offer.from || h.id != offer.payload.id))
 				::BBCoop.Connection.sendMessage("contract_leave", { to = h.owner, id = h.id });
 			if (this.Following != null) this.stopFollowing();
+			if (this.Tracker != null && (this.Tracker.owner != offer.from || this.Tracker.data.id != offer.payload.id)) this.clearTracker();
 			this.setHelping(offer.from, offer.payload.id, offer.payload.title);
 			::BBCoop.notify("You are helping " + offer.from + " with " + offer.payload.title + ". Fight their contract battles with them (Ctrl+B joins a nearby battle).");
 		}
@@ -393,6 +580,16 @@
 				return;
 			}
 		}
+		// Not while a combat dialog, menu or loading screen is up, or the game is paused: moving the
+		// company then carried it away from the party attacking it, and the battle it agreed to had
+		// nobody left to fight at its position (vanilla startCombat gave up and the loading screen
+		// never went away, v0.43.1)
+		try
+		{
+			if (state.isPaused() || state.m.MenuStack.hasBacksteps() || ::LoadingScreen.isVisible()) return;
+		}
+		catch (error) {}
+		if (::BBCoop.Battle.CombatArgs != null) return;
 		local pos = this.getEscortPos(owner);
 		local offset = this.getEscortOffset();
 		state.getPlayer().setPos(::createVec(pos.X + offset.X, pos.Y + offset.Y));
@@ -415,6 +612,7 @@
 		this.setHelping("", "", "");
 		if (_from in this.Escorts) delete this.Escorts[_from];
 		if (this.Following != null) this.stopFollowing(true);
+		this.clearTracker();
 		if ("gone" in _payload) ::BBCoop.notify(_from + " no longer has that contract.");
 		else if (_payload.cancelled) ::BBCoop.notify(_from + " broke the contract " + _payload.title + ".");
 		else ::BBCoop.notify(_from + " finished the contract " + _payload.title + ". Thanks for the help!");
@@ -427,6 +625,7 @@
 	{
 		local wasActive = this.getActiveContract() != null;
 		__original(_contract, _alreadyStarted);
+		if (!wasActive && this.getActiveContract() == _contract) ::BBCoop.Contract.TrackerShown = false; // our own contract took the panel
 		if (wasActive || _alreadyStarted || this.getActiveContract() != _contract) return;
 		try { ::BBCoop.Contract.share(true); }
 		catch (error) { ::BBCoop.log("Could not share the contract: " + error); }
@@ -439,6 +638,14 @@
 		if (contract == null) return;
 		try { ::BBCoop.Contract.onFinished(contract, _isCancelled); }
 		catch (error) { ::BBCoop.log("Could not tell helpers the contract ended: " + error); }
+	}
+
+	// vanilla refreshes the holder's panel here (every contract.setState): refresh the helpers' too
+	q.updateActiveContract = @(__original) function()
+	{
+		__original();
+		try { ::BBCoop.Contract.sendTracker(false); }
+		catch (error) { ::BBCoop.log("Could not send the contract tracker: " + error); }
 	}
 });
 
@@ -488,6 +695,8 @@
 			::BBCoop.log("Caravan escort update failed: " + error);
 			::BBCoop.Contract.stopFollowing(true);
 		}
+		try { ::BBCoop.Contract.updateTracker(); }
+		catch (error) { ::BBCoop.log("Contract tracker update failed: " + error); }
 	}
 
 	// a save made while travelling with a caravan must not keep provisions or camping switched off
@@ -510,6 +719,8 @@
 	q.onFinish = @(__original) function()
 	{
 		::BBCoop.Contract.Following = null;
+		::BBCoop.Contract.Tracker = null;
+		::BBCoop.Contract.TrackerShown = false;
 		::BBCoop.Contract.Escorts.clear();
 		__original();
 	}
@@ -517,6 +728,18 @@
 	q.loadCampaign = @(__original) function( _campaignFileName )
 	{
 		::BBCoop.Contract.Following = null; // loading resets the escort (vanilla onDeserialize)
+		::BBCoop.Contract.Tracker = null; // the owner sends it again within a few seconds
+		::BBCoop.Contract.TrackerShown = false;
 		__original(_campaignFileName);
+	}
+});
+
+// A helper's panel shows someone else's contract: clicking it offers to stop helping instead of
+// cancelling (vanilla would try to cancel our own contract, which we don't have)
+::BBCoop.MH.hook("scripts/ui/screens/world/modules/world_contract_screen/world_active_contract_panel_module", function(q) {
+	q.onShowContractDetails = @(__original) function()
+	{
+		if (::World.Contracts.getActiveContract() == null && ::BBCoop.Contract.TrackerShown && ::BBCoop.Contract.onPanelClicked()) return;
+		__original();
 	}
 });

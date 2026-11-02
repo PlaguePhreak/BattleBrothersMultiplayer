@@ -86,8 +86,13 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
   check(poll.messages.some((m) => m.type === 'contract_share' && m.payload.to === 'B' && m.payload.id === 'bot_1'), 'bot shares its test contract with a clanmate');
   await send('B', 'contract_join', { to: 'Bot', id: 'bot_1', join: true });
-  await sleep(11000);
+  await sleep(1000);
   poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  const track = poll.messages.find((m) => m.type === 'contract_track' && m.payload.to === 'B');
+  check(track && track.payload.id === 'bot_1' && track.payload.lists[0].title === 'Objectives' && track.payload.helpers === 1, 'bot sends its contract panel to the helper');
+  await sleep(10000);
+  poll = await req('GET', `/poll?player=B&since=${poll.seq}`);
+  check(poll.messages.some((m) => m.type === 'contract_track' && /Escort/.test(m.payload.lists[0].items[0].text)), 'bot updates the panel when its objective moves on');
   const pay = poll.messages.find((m) => m.type === 'contract_pay' && m.payload.to === 'B');
   check(pay && pay.payload.crowns === 150, 'bot pays the helper');
   // then it escorts a caravan for 15s (tests/escort_test.js) and ends the contract
@@ -100,6 +105,13 @@ const full = (n) => ({ seed: '123', day: 7, parties: [{ id: '11', x: 100, y: 100
   poll = await req('GET', '/poll?player=C&since=0');
   const times = poll.messages.filter((m) => m.type === 'world_time');
   check(times.length === 1 && times[0].payload.t === 101, 'only the newest world_time is kept');
+  // stored companies (v0.35.0): a joiner's newest copy replaces the older one; copies to different hosts stay
+  await send('B', 'company_save', { to: 'A', money: 100, bros: [{ name: 'x', raw: [], look: {} }] });
+  await send('B', 'company_save', { to: 'A', money: 250, bros: [{ name: 'x', raw: [], look: {} }] });
+  await send('C', 'company_save', { to: 'A', money: 5, bros: [{ name: 'y', raw: [], look: {} }] });
+  poll = await req('GET', '/poll?player=A&since=0');
+  const copies = poll.messages.filter((m) => m.type === 'company_save');
+  check(copies.length === 2 && copies.find((m) => m.from === 'B').payload.money === 250, 'only each player\'s newest company copy is kept');
   console.log('PASS');
   relay.kill(); process.exit(0);
 })().catch((e) => { console.log('FAIL', e); console.log(out); relay.kill(); process.exit(1); });

@@ -1,6 +1,7 @@
 this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 	m = {
-		BotEnabled = false
+		BotEnabled = false,
+		TurnNotice = null
 	},
 
 	function create()
@@ -42,11 +43,12 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		return url.find("://127.0.0.1") != null || url.find("://localhost") != null;
 	}
 
+	// Ctrl+J: check the relay again without re-joining the session (re-joining told everyone
+	// "X joined" each time). Not connected yet: connect with the current settings.
 	function runPing()
 	{
 		if (!this.isConnected()) return;
-		// settings may have changed since the main menu, so send them again
-		this.m.JSHandle.asyncCall("start", this.getConfig());
+		this.m.JSHandle.asyncCall("ping", this.getConfig());
 	}
 
 	function sendHello()
@@ -179,10 +181,40 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Join.start(_info);
 	}
 
+	// The joiner left the new campaign screen without starting
+	function cancelJoin( _data )
+	{
+		if (::BBCoop.Join.Pending != null) ::BBCoop.log("Join cancelled on the new campaign screen.");
+		::BBCoop.Join.Pending = null;
+	}
+
 	// The real battlefield (mirror.nut) is up: the battle panel only shows when it can't be used
 	function setBattleMirror( _on, _fallback )
 	{
 		if (this.isConnected()) this.m.JSHandle.asyncCall("setBattleMirror", { on = _on, fallback = _fallback });
+	}
+
+	// Our turn in the real battlefield while its turn bar shows someone else: the action strip
+	function setTurnNotice( _text )
+	{
+		if (_text == this.m.TurnNotice) return;
+		this.m.TurnNotice = _text;
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setTurnNotice", _text);
+	}
+
+	function setMirrorTurn( _data )
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("setMirrorTurn", _data);
+	}
+
+	function mirrorSkill( _id )
+	{
+		::BBCoop.Mirror.onStripSkill(_id);
+	}
+
+	function mirrorOrder( _action )
+	{
+		::BBCoop.Mirror.onStripOrder(_action);
 	}
 
 	function closeBattlePanel()
@@ -205,6 +237,14 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		::BBCoop.Battle.onPromptChoice(_data.id, _data.choice);
 		::BBCoop.Trade.onPromptChoice(_data.id, _data.choice);
 		::BBCoop.Contract.onPromptChoice(_data.id, _data.choice);
+		::BBCoop.Company.onPromptChoice(_data.id, _data.choice);
+	}
+
+	// Leave the relay session (the host reset our company): no more polling or sending until the
+	// next Multiplayer > Join
+	function stopSession()
+	{
+		if (this.isConnected()) this.m.JSHandle.asyncCall("stop", null);
 	}
 
 	function openTradeWindow()
@@ -292,6 +332,7 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				clan = ::BBCoop.getClan(),
 				baseBrush = brushes.baseBrush,
 				bodyBrush = brushes.bodyBrush,
+				banner = ::World.Assets.getBanner(),
 				escort = ::BBCoop.Contract.getEscortID()
 			};
 		}
@@ -308,6 +349,18 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 		if (typeof _msg.payload == "table" && ("to" in _msg.payload) && _msg.payload.to != ::BBCoop.getSetting("PlayerName"))
 			return;
 
+		try
+		{
+			this.dispatch(_msg);
+		}
+		catch (error)
+		{
+			::BBCoop.log("Handling a " + _msg.type + " message from " + _msg.from + " failed: " + error);
+		}
+	}
+
+	function dispatch( _msg )
+	{
 		switch (_msg.type)
 		{
 			case "alive":
@@ -318,11 +371,33 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 			case "battle_start":
 				::BBCoop.Battle.onBattleStartMessage(_msg.from, _msg.payload);
 				break;
+			case "battle_decline":
+				::BBCoop.Battle.onDecline(_msg.from, _msg.payload);
+				break;
 			case "battle_join":
 				::BBCoop.Battle.onJoinRequest(_msg.from, _msg.payload);
 				break;
 			case "session_request":
 				::BBCoop.Join.onSessionRequest(_msg.from, _msg.payload);
+				::BBCoop.Company.onSessionRequest(_msg.from, _msg.payload);
+				break;
+			case "company_save":
+				::BBCoop.Company.onSave(_msg.from, _msg.payload);
+				break;
+			case "company_request":
+				::BBCoop.Company.onRequest(_msg.from, _msg.payload);
+				break;
+			case "company_restore":
+				::BBCoop.Company.onRestore(_msg.from, _msg.payload);
+				break;
+			case "company_refused":
+				::BBCoop.Company.onRefused(_msg.from, _msg.payload);
+				break;
+			case "company_drop":
+				::BBCoop.Company.onDrop(_msg.from, _msg.payload);
+				break;
+			case "company_reset":
+				::BBCoop.Company.onReset(_msg.from, _msg.payload);
 				break;
 			case "battle_loot":
 				::BBCoop.Loot.onLoot(_msg.from, _msg.payload);
@@ -392,6 +467,9 @@ this.bb_coop_connection <- ::inherit("scripts/mods/msu/js_connection", {
 				break;
 			case "contract_done":
 				::BBCoop.Contract.onDone(_msg.from, _msg.payload);
+				break;
+			case "contract_track":
+				::BBCoop.Contract.onTrack(_msg.from, _msg.payload);
 				break;
 			case "world_ambush":
 				::BBCoop.World.onAmbush(_msg.from, _msg.payload);

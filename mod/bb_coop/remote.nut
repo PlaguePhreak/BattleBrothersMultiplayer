@@ -46,6 +46,7 @@
 	{
 		if (_e == null || !_e.isAlive()) return false;
 		if (this.getOwner(_e) == null) return false;
+		if (::BBCoop.Mirror.Active || this.getOwner(_e) == ::BBCoop.getSetting("PlayerName")) return false; // our own brother, in a copy
 		if (_e.getID() == this.TookOverID) return false;
 		if (_e.getMoraleState() == ::Const.MoraleState.Fleeing) return false; // vanilla AI runs fleeing brothers
 		local owner = this.getOwner(_e);
@@ -77,7 +78,9 @@
 		return ".";
 	}
 
-	function buildView( _owner, _active )
+	// _light: a between-turns update for players watching the copy (sent up to twice a second):
+	// leaves out the terrain, which never changes and is the bulk of a view
+	function buildView( _owner, _active, _light = false )
 	{
 		local size = ::Tactical.getMapSize();
 		local terrain = "", levels = "";
@@ -100,13 +103,15 @@
 			{
 				if (!::Tactical.isValidTileSquare(x, y))
 				{
-					terrain += " ";
-					levels += "0";
+					if (!_light) { terrain += " "; levels += "0"; }
 					continue;
 				}
 				local t = ::Tactical.getTileSquare(x, y);
-				terrain += this.terrainChar(t);
-				levels += ::Math.max(0, ::Math.min(9, t.Level)).tostring();
+				if (!_light)
+				{
+					terrain += this.terrainChar(t);
+					levels += ::Math.max(0, ::Math.min(9, t.Level)).tostring();
+				}
 
 				if (!t.IsOccupiedByActor) continue;
 				local u = t.getEntity();
@@ -137,15 +142,21 @@
 			to = _owner,
 			battleID = ::BBCoop.Battle.HostBattleID,
 			round = 0,
-			map = { w = size.X, h = size.Y, oddDown = this.isOddColumnDown(), terrain = terrain, levels = levels },
+			map = { w = size.X, h = size.Y, oddDown = this.isOddColumnDown() },
 			units = units,
 			turn = null
 		};
 		try { view.round = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+		if (!_light)
+		{
+			view.map.terrain <- terrain;
+			view.map.levels <- levels;
+		}
 		if (mirror)
 		{
 			view.activeID <- _active != null ? _active.getID() : null;
 			view.log <- ::BBCoop.Mirror.takeLogFor(_owner);
+			view.acts <- ::BBCoop.Mirror.takeActsFor(_owner);
 			view.dead <- clone ::BBCoop.Mirror.DeadIDs;
 		}
 		if (_active != null && this.getOwner(_active) == _owner && this.controls(_active))
@@ -221,11 +232,11 @@
 		};
 	}
 
-	function sendView( _owner, _active )
+	function sendView( _owner, _active, _light = false )
 	{
 		try
 		{
-			::BBCoop.Connection.sendMessage("battle_view", this.buildView(_owner, _active));
+			::BBCoop.Connection.sendMessage("battle_view", this.buildView(_owner, _active, _light));
 			this.LastViewSent = ::Time.getRealTimeF();
 		}
 		catch (error)
@@ -336,6 +347,7 @@
 		switch (_order.action)
 		{
 			case "end":
+				::BBCoop.log(_e.getName() + " (" + owner + ") ends his turn");
 				this.endTurn();
 				return;
 
@@ -396,8 +408,43 @@
 	function useSkill( _state, _e, _owner, _skillID, _x, _y )
 	{
 		local skill = _e.getSkills().getSkillByID(_skillID);
-		if (skill == null) { this.sendError(_owner, "Unknown skill."); return; }
-		if (!skill.isUsable() || !skill.isAffordable()) { this.sendError(_owner, skill.getName() + " can't be used right now."); return; }
+		if (skill == null)
+		{
+			// Reload of a crossbow or handgonne: vanilla only has that skill while the weapon is empty,
+			// and the guest's copy may be ahead of (or behind) this container. Rebuild it from the
+			// weapon's state and look again (v0.43.4); a skill still unknown is logged with what he has.
+			try
+			{
+				local w = _e.getItems().getItemAtSlot(::Const.ItemSlot.Mainhand);
+				if (w != null && ("IsLoaded" in w.m) && (_skillID == "actives.reload_bolt" || _skillID == "actives.reload_handgonne"))
+					::BBCoop.Mirror.syncReloadSkill(_e, w, false);
+				try { _e.getSkills().update(); } catch (e2) {}
+				skill = _e.getSkills().getSkillByID(_skillID);
+			}
+			catch (error) {}
+		}
+		if (skill == null)
+		{
+			local have = "";
+			try { foreach (sk in _e.getSkills().getAllSkillsOfType(::Const.SkillType.Active)) have += (have == "" ? "" : ", ") + sk.getID(); } catch (error) {}
+			::BBCoop.log(format("%s (%s) asked for the unknown skill %s; he has: %s", _e.getName(), _owner, "" + _skillID, have));
+			this.sendError(_owner, "Unknown skill.");
+			return;
+		}
+		if (!skill.isUsable() || !skill.isAffordable())
+		{
+			// v0.46.0: say what is missing (the copy may show other numbers) and send the real ones
+			local why = "can't be used right now";
+			try
+			{
+				if (skill.getActionPointCost() > _e.getActionPoints()) why = format("needs %i action points, %s has %i", skill.getActionPointCost(), _e.getName(), _e.getActionPoints());
+				else if (skill.getFatigueCost() + _e.getFatigue() > _e.getFatigueMax()) why = format("needs %i fatigue, %s has %i of %i left", skill.getFatigueCost(), _e.getName(), _e.getFatigueMax() - _e.getFatigue(), _e.getFatigueMax());
+			}
+			catch (error) {}
+			this.sendError(_owner, skill.getName() + " " + why + ".");
+			this.NeedView = true;
+			return;
+		}
 		local tile = skill.isTargeted() && ::Tactical.isValidTileSquare(_x, _y) ? ::Tactical.getTileSquare(_x, _y) : _e.getTile();
 		if (!skill.isUsableOn(tile)) { this.sendError(_owner, "Invalid target for " + skill.getName() + "."); return; }
 
@@ -409,6 +456,35 @@
 };
 
 ::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
+	// The inventory button / "I" opens the character screen for the acting brother, where gear can be
+	// swapped. v0.45.0: in a shared battle that only changes the local game (the host swapped a
+	// guest's weapons and only he saw it), so another player's brother, and every brother in a copied
+	// battle, keep their gear until the fight is over. Checked against vanilla showCharacterScreen
+	// (_forced = true is the battle preparation screen, which stays as it is).
+	q.showCharacterScreen = @(__original) function( _forced = false )
+	{
+		if (!_forced)
+		{
+			local e = null;
+			try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+			if (e != null && e.getFaction() == ::Const.Faction.Player)
+			{
+				if (::BBCoop.Mirror.Active)
+				{
+					::BBCoop.notify("Co-op: gear can't be changed in a copy of someone else's battle. The host's game has the real one.");
+					return;
+				}
+				local owner = ::BBCoop.Remote.getOwner(e);
+				if (owner != null && owner != ::BBCoop.getSetting("PlayerName"))
+				{
+					::BBCoop.notify("Co-op: " + e.getName() + " is " + owner + "'s brother. His gear stays as they set it; a swap here would only show on your screen.");
+					return;
+				}
+			}
+		}
+		__original(_forced);
+	}
+
 	q.updateCurrentEntity = @(__original) function()
 	{
 		// a copy of another player's battle: nothing acts here, the host's views drive it (mirror.nut)
@@ -419,8 +495,28 @@
 			return;
 		}
 
+		// join window before round 1 (battle.nut): nothing happens until the other players are in
+		try { if (::BBCoop.Battle.updateGather(this)) return; }
+		catch (error)
+		{
+			::BBCoop.log("Join window failed: " + error);
+			::BBCoop.Battle.GatherUntil = 0.0;
+			if (::BBCoop.Battle.FirstRoundHeld) { ::BBCoop.Battle.FirstRoundHeld = false; ::Tactical.TurnSequenceBar.initNextRound(); }
+		}
+
 		local e = null;
 		try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+
+		// a dead unit got the turn (he stayed in the turn bar): skip him instead of waiting forever
+		local lastInRound = false;
+		try { lastInRound = ::Tactical.TurnSequenceBar.m.IsInitNextRound || ::Tactical.TurnSequenceBar.m.CurrentEntities.len() <= 1; } catch (error) {}
+		if (e != null && !lastInRound && (!e.isAlive() || !e.isPlacedOnMap()) && ::BBCoop.Battle.HostBattleID != null && !(this.m.IsGameFinishable && this.isBattleEnded()))
+		{
+			::BBCoop.log(e.getName() + " is dead or gone but had the turn: skipping him");
+			try { ::Tactical.TurnSequenceBar.removeEntity(e); } catch (error) {}
+			try { if (::Tactical.TurnSequenceBar.getActiveEntity() == e) ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) {}
+			return;
+		}
 
 		// keep the other players up to date on whose turn it is
 		if (e != null && ::BBCoop.Battle.HostBattleID != null && ::BBCoop.Battle.JoinedOwners.len() != 0)
@@ -432,6 +528,20 @@
 				if (id != ::BBCoop.Remote.TookOverID) ::BBCoop.Remote.TookOverID = null;
 				::BBCoop.Remote.onTurnChange(e);
 			}
+			try { ::BBCoop.Mirror.hostTick(e); }
+			catch (error) { ::BBCoop.log("Mirror sync failed: " + error); }
+			try { ::BBCoop.Mirror.markTurn(e); } catch (error) {}
+			try
+			{
+				local notice = null;
+				if (e.getFaction() == ::Const.Faction.Player)
+				{
+					local owner = ::BBCoop.Remote.getOwner(e);
+					notice = owner == null || !::BBCoop.Remote.controls(e) ? "It's your turn" : owner + "'s turn";
+				}
+				::BBCoop.Connection.setTurnNotice(notice);
+			}
+			catch (error) {}
 		}
 
 		local remote = false;
