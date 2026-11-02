@@ -431,7 +431,20 @@
 			this.sendError(_owner, "Unknown skill.");
 			return;
 		}
-		if (!skill.isUsable() || !skill.isAffordable()) { this.sendError(_owner, skill.getName() + " can't be used right now."); return; }
+		if (!skill.isUsable() || !skill.isAffordable())
+		{
+			// v0.46.0: say what is missing (the copy may show other numbers) and send the real ones
+			local why = "can't be used right now";
+			try
+			{
+				if (skill.getActionPointCost() > _e.getActionPoints()) why = format("needs %i action points, %s has %i", skill.getActionPointCost(), _e.getName(), _e.getActionPoints());
+				else if (skill.getFatigueCost() + _e.getFatigue() > _e.getFatigueMax()) why = format("needs %i fatigue, %s has %i of %i left", skill.getFatigueCost(), _e.getName(), _e.getFatigueMax() - _e.getFatigue(), _e.getFatigueMax());
+			}
+			catch (error) {}
+			this.sendError(_owner, skill.getName() + " " + why + ".");
+			this.NeedView = true;
+			return;
+		}
 		local tile = skill.isTargeted() && ::Tactical.isValidTileSquare(_x, _y) ? ::Tactical.getTileSquare(_x, _y) : _e.getTile();
 		if (!skill.isUsableOn(tile)) { this.sendError(_owner, "Invalid target for " + skill.getName() + "."); return; }
 
@@ -495,7 +508,9 @@
 		try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
 
 		// a dead unit got the turn (he stayed in the turn bar): skip him instead of waiting forever
-		if (e != null && (!e.isAlive() || !e.isPlacedOnMap()) && ::BBCoop.Battle.HostBattleID != null && !(this.m.IsGameFinishable && this.isBattleEnded()))
+		local lastInRound = false;
+		try { lastInRound = ::Tactical.TurnSequenceBar.m.IsInitNextRound || ::Tactical.TurnSequenceBar.m.CurrentEntities.len() <= 1; } catch (error) {}
+		if (e != null && !lastInRound && (!e.isAlive() || !e.isPlacedOnMap()) && ::BBCoop.Battle.HostBattleID != null && !(this.m.IsGameFinishable && this.isBattleEnded()))
 		{
 			::BBCoop.log(e.getName() + " is dead or gone but had the turn: skipping him");
 			try { ::Tactical.TurnSequenceBar.removeEntity(e); } catch (error) {}

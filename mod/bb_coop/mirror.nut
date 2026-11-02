@@ -36,6 +36,8 @@
 	Moves = [],             // { id, x, y, tries }
 	NextMoveTime = 0.0,
 	Advancing = false,      // we are moving the turn bar ourselves
+	Skipping = false,       // host: the initNextTurn hook is skipping dead units (no re-entry)
+	LastUnits = {},         // joiner: host id -> unit of the last view (AP/fatigue to keep)
 	Killing = false,        // we are removing a unit ourselves
 	Logging = false,        // we are writing a line from the host's log
 	CycleFor = null,        // host entity id we are moving the turn bar to
@@ -392,12 +394,15 @@
 		local now = ::Time.getRealTimeF();
 		if (now - this.LastTickTime < 0.5) return;
 		this.LastTickTime = now;
-		local f = 0;
+		// v0.46.0: the active unit is part of it. A turn change alone (a brother who waited comes up
+		// again, or the host's own brother is next) changed nothing else, so no view went out and the
+		// copy kept showing "It's your turn" for a brother whose turn was over.
+		local f = _active != null ? _active.getID() % 1000003 : 1;
 		foreach (e in ::Tactical.Entities.getAllInstancesAsArray())
 		{
 			if (e == null || !e.isAlive() || !e.isPlacedOnMap()) continue;
 			local t = e.getTile();
-			f = (f * 7 + e.getID() * 31 + t.SquareCoords.X * 101 + t.SquareCoords.Y * 7 + e.getHitpoints() * 3 + e.getActionPoints()) % 1000003;
+			f = (f * 7 + e.getID() * 31 + t.SquareCoords.X * 101 + t.SquareCoords.Y * 7 + e.getHitpoints() * 3 + e.getActionPoints() + e.getFatigue() * 13) % 1000003;
 		}
 		if (f == this.LastFingerprint) return;
 		this.LastFingerprint = f;
@@ -767,6 +772,18 @@
 		this.cancelIfNoActive();
 	}
 
+	// The copy's own round and turn starts refill action points and recover fatigue (vanilla
+	// actor.onRoundStart / onTurnStart); the host's numbers from the last view win (v0.46.0)
+	function keepHostPoints( _e )
+	{
+		if (!this.Active || _e == null || !_e.getFlags().has("BBCoopMirrorID")) return;
+		local id = _e.getFlags().get("BBCoopMirrorID");
+		if (!(id in this.LastUnits)) return;
+		local u = this.LastUnits[id];
+		if (("ap" in u) && _e.getActionPoints() != u.ap) _e.setActionPoints(u.ap);
+		if (("fat" in u) && _e.getFatigue() != u.fat) _e.setFatigue(u.fat);
+	}
+
 	// The game's cursor code needs a living active unit while a skill is selected
 	function cancelIfNoActive()
 	{
@@ -808,6 +825,8 @@
 	{
 		if (!_initial && this.LastApplied != null) this.logDrift(this.LastApplied);
 		this.LastApplied = _view;
+		this.LastUnits.clear();
+		foreach (u in _view.units) if ("id" in u) this.LastUnits[u.id] <- u;
 		this.Moves.clear();
 		local seen = {};
 		local need = [];
@@ -1003,9 +1022,11 @@
 		if (activeID == _target.getID()) return true;
 		if (this.CycleFor != _targetID) { this.CycleFor = _targetID; this.CycleTries = 0; this.LastActiveID = null; this.LastCycle = 0.0; }
 		if (this.CycleTries >= this.Units.len() * 2 + 4) return false; // give up for this turn; the map still works
-		// Someone else's unit that already had his turn in the copy's round: going on would run the
-		// copy into its next round ahead of the host. Wait there until the host's round moves on.
-		if (!this.isOurTurn())
+		// A unit that already had his turn in the copy's round (he waited on the host, or the copy's
+		// initiative order differs): going on would run the copy into its next round ahead of the
+		// host, and every round start there refills everyone's action points (v0.46.0: the copy was
+		// three rounds ahead, its brother showed 9 AP where the host had 3). Wait until the host's
+		// round moves on; the map still takes orders for our brother whoever the bar shows.
 		{
 			local togo = null;
 			try { togo = ::Tactical.TurnSequenceBar.getTurnsUntilActive(_target.getID()); } catch (error) {}
@@ -1335,6 +1356,7 @@
 		this.Created.clear();
 		this.SpawnData.clear();
 		this.LastApplied = null;
+		this.LastUnits.clear();
 		this.HostRound = null;
 		this.View = null;
 		this.StripKey = null;
@@ -1481,6 +1503,23 @@
 });
 
 ::BBCoop.MH.hook("scripts/entity/tactical/actor", function(q) {
+	// a copy's round/turn start must not refill what the host's brother has spent (v0.46.0)
+	q.onRoundStart = @(__original) function( ... )
+	{
+		local args = [this];
+		args.extend(vargv);
+		local ret = __original.acall(args);
+		if (::BBCoop.Mirror.Active) { try { ::BBCoop.Mirror.keepHostPoints(this); } catch (error) {} }
+		return ret;
+	}
+	q.onTurnStart = @(__original) function( ... )
+	{
+		local args = [this];
+		args.extend(vargv);
+		local ret = __original.acall(args);
+		if (::BBCoop.Mirror.Active) { try { ::BBCoop.Mirror.keepHostPoints(this); } catch (error) {} }
+		return ret;
+	}
 	q.kill = @(__original) function( _killer = null, _skill = null, _fatalityType = ::Const.FatalityType.None, _silent = false )
 	{
 		if (::BBCoop.Mirror.Active && !::BBCoop.Mirror.Killing) return; // only the host's battle kills
@@ -1515,18 +1554,30 @@
 		args.extend(vargv);
 		local ret = __original.acall(args);
 		// host of a shared battle: never hand the turn to a dead unit (his turn bar entry can't be
-		// shown and the battle froze); move on to the next one
-		if (::BBCoop.Battle.HostBattleID != null && !::BBCoop.Mirror.Active)
+		// shown and the battle froze); move on to the next one.
+		// v0.46.0: not while vanilla itself is done with the round. With one unit left in the round
+		// initNextTurn only flags the next round and keeps him in front, and removeEntity on the
+		// front unit calls initNextTurn again: the old loop recursed through this hook until the
+		// game crashed (a dead Brigand Thug, 184,000 log lines). The next round clears him anyway.
+		if (::BBCoop.Battle.HostBattleID != null && !::BBCoop.Mirror.Active && !::BBCoop.Mirror.Skipping)
 		{
-			for (local i = 0; i < 8; i++)
+			::BBCoop.Mirror.Skipping = true;
+			try
 			{
-				local e = null;
-				try { e = this.getActiveEntity(); } catch (error) {}
-				if (e == null || (e.isAlive() && e.isPlacedOnMap())) break;
-				::BBCoop.log(e.getName() + " is dead or gone but was next in the turn bar: skipping him");
-				try { this.removeEntity(e); } catch (error) {}
-				try { if (this.getActiveEntity() == e) __original.acall(args); } catch (error) { break; }
+				for (local i = 0; i < 8; i++)
+				{
+					if (this.m.IsLocked || this.m.IsInitNextRound || this.m.CurrentEntities.len() <= 1) break;
+					local e = this.getActiveEntity();
+					if (e == null || (e.isAlive() && e.isPlacedOnMap())) break;
+					::BBCoop.log(e.getName() + " is dead or gone but was next in the turn bar: skipping him");
+					this.removeEntity(e);
+					if (this.getActiveEntity() != e) break;
+					__original.acall(args);
+					if (this.getActiveEntity() == e) break; // vanilla keeps him: leave it to the next round
+				}
 			}
+			catch (error) { ::BBCoop.log("Turn bar skip: " + error); }
+			::BBCoop.Mirror.Skipping = false;
 		}
 		return ret;
 	}
