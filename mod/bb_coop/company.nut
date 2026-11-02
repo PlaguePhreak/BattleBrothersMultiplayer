@@ -736,6 +736,7 @@
 					if (::World.Events.m.ActiveEvent != null) ::World.Events.m.ActiveEvent.clear();
 					::World.Events.m.ActiveEvent = null;
 					::World.Events.m.IsEventShown = false;
+					if (::World.State.m.IsGameAutoPaused) ::World.State.setAutoPause(false); // the screen's own callback never runs
 				}
 				catch (e3) {}
 			}
@@ -752,6 +753,10 @@
 			if (::BBCoop.Company.skipsEvent(_id))
 			{
 				::BBCoop.log("Skipped the origin's intro event " + _id + ": this company plays in a joined world.");
+				// vanilla startNewCampaign auto-pauses the world, and only closing the intro event
+				// lifts that (world_state.showEventScreen's callback). Without it the world sits at
+				// speed 0 for good, spacebar included: the company could not move (v0.46.1)
+				try { if (::World.State.m.IsGameAutoPaused) ::World.State.setAutoPause(false); } catch (e2) {}
 				return false;
 			}
 		}

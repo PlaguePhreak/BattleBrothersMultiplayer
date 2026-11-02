@@ -302,12 +302,34 @@
 		}
 	}
 
+	// Joiner: vanilla's auto-pause (new campaign, event, dialog, autosave) keeps the world at speed 0
+	// whatever the pause button says. Every screen that sets it lifts it when it closes; a joined
+	// campaign's skipped intro event never did (v0.46.1). Lift it ourselves when nothing is open.
+	AutoPausedSince = null,
+	function clearStaleAutoPause( _now )
+	{
+		local state = ::World.State;
+		if (!state.m.IsGameAutoPaused) { this.AutoPausedSince = null; return; }
+		if (this.AutoPausedSince == null) { this.AutoPausedSince = _now; return; }
+		if (_now - this.AutoPausedSince < 3.0) return;
+		if (state.m.MenuStack.hasBacksteps()) return;
+		try { if (state.m.EventScreen.isVisible() || state.m.EventScreen.isAnimating()) return; } catch (error) {}
+		try { if (::World.State.DialogScreen.isVisible() || ::World.State.DialogScreen.isAnimating()) return; } catch (error) {}
+		::BBCoop.log("The world was left auto-paused with nothing open: lifting it.");
+		state.setAutoPause(false);
+		this.AutoPausedSince = null;
+	}
+
 	// Every world frame, after vanilla set the speed: everyone moves at the session speed
 	function onWorldUpdate()
 	{
 		local now = ::Time.getRealTimeF();
 		local joiner = ::BBCoop.World.getHost() != null;
-		if (joiner) this.followHostPause();
+		if (joiner)
+		{
+			this.followHostPause();
+			try { this.clearStaleAutoPause(now); } catch (error) {}
+		}
 		else if (this.Clock != null && this.isHostPaused() != (this.Clock.Speed <= 0)) this.updateHost(now); // pause goes out at once
 		local speed = this.getSpeed();
 		if (speed == null || speed <= 0) return;
