@@ -212,6 +212,8 @@
 		if (user == null || !user.isAlive() || !user.isPlacedOnMap()) return;
 		if (!::Tactical.isValidTileSquare(_act.x, _act.y)) return;
 		local tile = ::Tactical.getTileSquare(_act.x, _act.y);
+		// nothing to show for a unit nobody here can see (v0.46.3)
+		try { if (user.isHiddenToPlayer() || !user.getTile().IsVisibleForPlayer || !tile.IsVisibleForPlayer) return; } catch (error) {}
 		local skill = null;
 		try { skill = user.getSkills().getSkillByID(_act.skill); } catch (error) {}
 		if (skill != null)
@@ -916,8 +918,11 @@
 			if (++m.tries < 20) this.Moves.push(m);
 			return;
 		}
-		// animated slide first; if the unit still isn't there a moment later, put it there instantly
+		// animated slide first; if the unit still isn't there a moment later, put it there instantly.
+		// v0.46.3: no slide for a unit the player can't see or into a tile hidden by the fog of war
+		// (Touko's game froze the moment an enemy walked out of everyone's sight)
 		local instant = m.tries >= 3;
+		try { if (e.isHiddenToPlayer() || !tile.IsVisibleForPlayer || !now.IsVisibleForPlayer) instant = true; } catch (error) {}
 		try { ::Tactical.getNavigator().teleport(e, tile, null, null, !instant); }
 		catch (error) { ::BBCoop.log("Moving " + e.getName() + " failed: " + error); }
 		m.tries += 3;
