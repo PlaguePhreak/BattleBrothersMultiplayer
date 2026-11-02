@@ -443,6 +443,35 @@
 };
 
 ::BBCoop.MH.hook("scripts/states/tactical_state", function(q) {
+	// The inventory button / "I" opens the character screen for the acting brother, where gear can be
+	// swapped. v0.43.5: in a shared battle that only changes the local game (the host swapped a
+	// guest's weapons and only he saw it), so another player's brother, and every brother in a copied
+	// battle, keep their gear until the fight is over. Checked against vanilla showCharacterScreen
+	// (_forced = true is the battle preparation screen, which stays as it is).
+	q.showCharacterScreen = @(__original) function( _forced = false )
+	{
+		if (!_forced)
+		{
+			local e = null;
+			try { e = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+			if (e != null && e.getFaction() == ::Const.Faction.Player)
+			{
+				if (::BBCoop.Mirror.Active)
+				{
+					::BBCoop.notify("Co-op: gear can't be changed in a copy of someone else's battle. The host's game has the real one.");
+					return;
+				}
+				local owner = ::BBCoop.Remote.getOwner(e);
+				if (owner != null && owner != ::BBCoop.getSetting("PlayerName"))
+				{
+					::BBCoop.notify("Co-op: " + e.getName() + " is " + owner + "'s brother. His gear stays as they set it; a swap here would only show on your screen.");
+					return;
+				}
+			}
+		}
+		__original(_forced);
+	}
+
 	q.updateCurrentEntity = @(__original) function()
 	{
 		// a copy of another player's battle: nothing acts here, the host's views drive it (mirror.nut)

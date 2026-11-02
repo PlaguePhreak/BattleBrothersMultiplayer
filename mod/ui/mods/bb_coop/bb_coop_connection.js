@@ -12,6 +12,10 @@ var BBCoopConnection = function ()
 	this.mLastPosSent = 0;
 	this.mPollTimer = null;
 	this.mPosTimer = null;
+	this.mSendQueue = [];
+	this.mSending = false;    // a /send request is in flight
+	this.mSendNo = 0;         // numbers each send, so a late answer can't end a newer one
+	this.mSendWatch = null;   // gives up on a send the relay never answers (v0.45.0)
 };
 
 BBCoopConnection.prototype = Object.create(MSUBackendConnection.prototype);
@@ -93,7 +97,7 @@ BBCoopConnection.prototype.start = function (_config)
 	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
 	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
 	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
-	this.mSendQueue = []; // messages for the old session don't go out
+	this.resetSends(); // messages for the old session don't go out
 
 	this.log('Connecting to relay ' + _config.relayURL + ' as ' + _config.playerName);
 	var started = new Date().getTime();
@@ -125,7 +129,7 @@ BBCoopConnection.prototype.stop = function ()
 	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
 	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
 	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
-	this.mSendQueue = [];
+	this.resetSends();
 	this.log('Left the co-op session');
 };
 
@@ -276,6 +280,19 @@ BBCoopConnection.prototype.send = function (_msg, _callback)
 	this.flushSends();
 };
 
+// Drops the queue and forgets a send in flight (its answer, if it ever comes, is ignored)
+BBCoopConnection.prototype.resetSends = function ()
+{
+	this.mSendQueue = [];
+	this.mSending = false;
+	this.mSendNo++;
+	if (this.mSendWatch) { clearTimeout(this.mSendWatch); this.mSendWatch = null; }
+};
+
+// One send at a time, in order. v0.45.0: a request the relay never answers (the game's XMLHttpRequest
+// does not always fire ontimeout) used to leave mSending true forever, so nothing went out any more:
+// the joiner's "ask the host" never left and the host never heard of them. A watchdog now gives up
+// on a send after 12 seconds and moves on.
 BBCoopConnection.prototype.flushSends = function ()
 {
 	var self = this;
@@ -283,13 +300,24 @@ BBCoopConnection.prototype.flushSends = function ()
 	var next = this.mSendQueue.shift();
 	if (next.session !== this.mSessionId || this.mConfig === null) { this.flushSends(); return; }
 	this.mSending = true;
+	var no = ++this.mSendNo;
 	var done = function (_status)
 	{
+		if (no !== self.mSendNo) return; // given up on, or the session was restarted meanwhile
 		self.mSending = false;
+		if (self.mSendWatch) { clearTimeout(self.mSendWatch); self.mSendWatch = null; }
 		if (_status !== 200) self.log('Send failed (status ' + _status + ', ' + next.msg.type + ')');
-		if (next.callback) next.callback(_status === 200);
+		if (next.callback) { try { next.callback(_status === 200); } catch (e) { self.log('Send callback failed (' + e + ')'); } }
 		self.flushSends();
 	};
+	if (this.mSendWatch) clearTimeout(this.mSendWatch);
+	this.mSendWatch = setTimeout(function ()
+	{
+		self.mSendWatch = null;
+		if (no !== self.mSendNo || !self.mSending) return;
+		self.log('Send of ' + next.msg.type + ' got no answer from the relay in 12 s, giving up on it');
+		done(0);
+	}, 12000);
 	try
 	{
 		this.request('POST', '/send', { from: this.mConfig.playerName, type: next.msg.type, payload: next.msg.payload }, done);
@@ -1116,7 +1144,11 @@ BBCoopConnection.prototype.requestSession = function ()
 {
 	var self = this;
 	this.setJoinStatus('Connected. Asking the host for its world...', false);
-	this.send({ type: 'session_request', payload: {} });
+	// straight to the relay, not behind other queued sends (v0.45.0)
+	this.request('POST', '/send', { from: this.mConfig.playerName, type: 'session_request', payload: {} }, function (_status)
+	{
+		if (_status !== 200 && self.mJoinWaiting) self.setJoinStatus('Could not ask the host (status ' + _status + '). Try again.', true);
+	});
 	if (this.mJoinTimer) clearTimeout(this.mJoinTimer);
 	this.mJoinTimer = setTimeout(function ()
 	{
