@@ -61,11 +61,13 @@
 			};
 			::BBCoop.notify(_from + "'s company is now on your map.");
 			this.setStrength(party, _payload);
+			this.setBanner(party, _payload);
 			return;
 		}
 
 		local e = this.Entries[_from];
 		this.setStrength(e.Party, _payload);
+		this.setBanner(e.Party, _payload);
 		e.From = e.Party.getPos();
 		e.To = target;
 		e.StartTime = now;
@@ -85,6 +87,9 @@
 			// enemies can go after the other player's company: when one catches it, world.nut
 			// tells that player's game to start the fight there instead of fighting the ghost
 			party.setAttackableByAI(true);
+			// not by the player: a Ctrl+click force-attack on a player-faction party made vanilla look
+			// up a faction that doesn't exist and crashed the game (v0.43.1)
+			party.setAttackable(false);
 			party.setVisibleInFogOfWar(true);
 			party.getFlags().set("BBCoopGhost", _from);
 			this.setBrush(party, "base", "baseBrush" in _payload ? _payload.baseBrush : null, "world_base_07");
@@ -95,6 +100,38 @@
 		{
 			::BBCoop.log("Could not spawn ghost for " + _from + ": " + error);
 			return null;
+		}
+	}
+
+	// v0.29.0: the other company carries its banner like a player's company; a clanmate's carries ours
+	function getBannerFor( _payload )
+	{
+		local clan = ::BBCoop.getClan();
+		if (clan != "" && ("clan" in _payload) && _payload.clan == clan) return ::World.Assets.getBanner();
+		return ("banner" in _payload && _payload.banner != null) ? _payload.banner : "";
+	}
+
+	function setBanner( _party, _payload )
+	{
+		local banner = this.getBannerFor(_payload);
+		if (banner == "") return;
+		try
+		{
+			if (!_party.hasSprite("banner")) return;
+			local sprite = _party.getSprite("banner");
+			if (!sprite.HasBrush || sprite.getBrush().Name != banner) sprite.setBrush(banner);
+			sprite.Visible = true;
+			// the "X's company" name stays shown, like on that player's own screen
+			if (_party.hasLabel("name"))
+			{
+				local label = _party.getLabel("name");
+				label.Text = _party.getName();
+				label.Visible = true;
+			}
+		}
+		catch (error)
+		{
+			::BBCoop.log("Could not set the banner of " + _party.getName() + ": " + error);
 		}
 	}
 

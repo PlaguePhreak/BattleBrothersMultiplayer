@@ -12,6 +12,10 @@ var BBCoopConnection = function ()
 	this.mLastPosSent = 0;
 	this.mPollTimer = null;
 	this.mPosTimer = null;
+	this.mSendQueue = [];
+	this.mSending = false;    // a /send request is in flight
+	this.mSendNo = 0;         // numbers each send, so a late answer can't end a newer one
+	this.mSendWatch = null;   // gives up on a send the relay never answers (v0.45.0)
 };
 
 BBCoopConnection.prototype = Object.create(MSUBackendConnection.prototype);
@@ -93,6 +97,7 @@ BBCoopConnection.prototype.start = function (_config)
 	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
 	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
 	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
+	this.resetSends(); // messages for the old session don't go out
 
 	this.log('Connecting to relay ' + _config.relayURL + ' as ' + _config.playerName);
 	var started = new Date().getTime();
@@ -114,6 +119,18 @@ BBCoopConnection.prototype.start = function (_config)
 		self.sendHostCard(session, function () { self.join(session); });
 		self.mHostTimer = setInterval(function () { self.sendHostCard(session, null); }, 10000);
 	});
+};
+
+// Leave the session: nothing is polled or sent until start() runs again (v0.43.0, the host reset
+// this player's company). The config stays so later sends fail quietly instead of complaining.
+BBCoopConnection.prototype.stop = function ()
+{
+	this.mSessionId++;
+	if (this.mPollTimer !== null) { clearTimeout(this.mPollTimer); this.mPollTimer = null; }
+	if (this.mPosTimer !== null) { clearInterval(this.mPosTimer); this.mPosTimer = null; }
+	if (this.mHostTimer) { clearInterval(this.mHostTimer); this.mHostTimer = null; }
+	this.resetSends();
+	this.log('Left the co-op session');
 };
 
 BBCoopConnection.prototype.join = function (_session)
@@ -184,13 +201,14 @@ BBCoopConnection.prototype.poll = function (_session)
 		{
 			self.mPollFails = 0;
 			if (self.mRelayDown) { self.mRelayDown = false; self.notify('Connection to the relay is back.'); }
+			if (_data.gap) self.notify('Some messages from the other players were missed while the connection was down (the relay keeps only recent ones).');
 			self.mLastSeq = _data.seq;
 			for (var i = 0; i < _data.messages.length; i++)
 			{
 				var msg = _data.messages[i];
 				if (msg.from === self.mConfig.playerName) continue;
 				// world updates can be big: don't hand someone else's to the game
-				if (msg.type.indexOf('world_') === 0 && msg.payload && msg.payload.to && msg.payload.to !== self.mConfig.playerName) continue;
+				if ((msg.type.indexOf('world_') === 0 || msg.type.indexOf('company_') === 0) && msg.payload && msg.payload.to && msg.payload.to !== self.mConfig.playerName) continue;
 				self.notePlayer(msg);
 				if (self.handleBattleMessage(msg)) continue;
 				SQ.call(self.mSQHandle, 'onMessage', msg);
@@ -251,18 +269,77 @@ BBCoopConnection.prototype.sendHostCard = function (_session, _done)
 	});
 };
 
+// Messages go out one after the other (v0.42.0): with one request per message in flight at
+// once, two messages sent back to back could reach the relay in either order, and a joiner
+// handled "battle_over" before the "battle_result" sent just before it.
 BBCoopConnection.prototype.send = function (_msg, _callback)
 {
-	var self = this;
 	if (this.mConfig === null) return;
-	this.request('POST', '/send', {
-		from: this.mConfig.playerName,
-		type: _msg.type,
-		payload: _msg.payload
-	}, function (_status)
+	if (!this.mSendQueue) this.mSendQueue = [];
+	this.mSendQueue.push({ msg: _msg, callback: _callback, session: this.mSessionId });
+	this.flushSends();
+};
+
+// Drops the queue and forgets a send in flight (its answer, if it ever comes, is ignored)
+BBCoopConnection.prototype.resetSends = function ()
+{
+	this.mSendQueue = [];
+	this.mSending = false;
+	this.mSendNo++;
+	if (this.mSendWatch) { clearTimeout(this.mSendWatch); this.mSendWatch = null; }
+};
+
+// One send at a time, in order. v0.45.0: a request the relay never answers (the game's XMLHttpRequest
+// does not always fire ontimeout) used to leave mSending true forever, so nothing went out any more:
+// the joiner's "ask the host" never left and the host never heard of them. A watchdog now gives up
+// on a send after 12 seconds and moves on.
+BBCoopConnection.prototype.flushSends = function ()
+{
+	var self = this;
+	if (this.mSending || !this.mSendQueue || this.mSendQueue.length === 0) return;
+	var next = this.mSendQueue.shift();
+	if (next.session !== this.mSessionId || this.mConfig === null) { this.flushSends(); return; }
+	this.mSending = true;
+	var no = ++this.mSendNo;
+	var done = function (_status)
 	{
-		if (_status !== 200) self.log('Send failed (status ' + _status + ')');
-		if (_callback) _callback(_status === 200);
+		if (no !== self.mSendNo) return; // given up on, or the session was restarted meanwhile
+		self.mSending = false;
+		if (self.mSendWatch) { clearTimeout(self.mSendWatch); self.mSendWatch = null; }
+		if (_status !== 200) self.log('Send failed (status ' + _status + ', ' + next.msg.type + ')');
+		if (next.callback) { try { next.callback(_status === 200); } catch (e) { self.log('Send callback failed (' + e + ')'); } }
+		self.flushSends();
+	};
+	if (this.mSendWatch) clearTimeout(this.mSendWatch);
+	this.mSendWatch = setTimeout(function ()
+	{
+		self.mSendWatch = null;
+		if (no !== self.mSendNo || !self.mSending) return;
+		self.log('Send of ' + next.msg.type + ' got no answer from the relay in 12 s, giving up on it');
+		done(0);
+	}, 12000);
+	try
+	{
+		this.request('POST', '/send', { from: this.mConfig.playerName, type: next.msg.type, payload: next.msg.payload }, done);
+	}
+	catch (e)
+	{
+		this.log('Send failed (' + e + ')');
+		done(0);
+	}
+};
+
+// Ctrl+J: how is the relay doing, without joining again
+BBCoopConnection.prototype.ping = function (_config)
+{
+	var self = this;
+	if (this.mConfig === null || !this.mPollTimer) { this.start(_config); return; }
+	var started = new Date().getTime();
+	this.request('GET', '/ping', null, function (_status, _data)
+	{
+		if (_status !== 200 || _data === null) { self.notify('Could not reach the co-op relay at ' + self.mConfig.relayURL + ' (status ' + _status + ').'); return; }
+		var ms = new Date().getTime() - started;
+		self.notify('Relay reachable (' + ms + ' ms round trip, relay v' + _data.version + ', ' + _data.players + ' / ' + _data.max + ' players).');
 	});
 };
 
@@ -330,18 +407,19 @@ BBCoopConnection.prototype.handleBattleMessage = function (_msg)
 	if (_msg.type === 'battle_view')
 	{
 		if (!forMe) return true;
+		// between-turns views leave the terrain out (it never changes): take it from the last full view
+		if (p.map && p.map.terrain === undefined)
+		{
+			var last = this.mBattle && this.mBattle.view && this.mBattle.view.battleID === p.battleID ? this.mBattle.view.map : null;
+			if (last && last.terrain !== undefined) { p.map.terrain = last.terrain; p.map.levels = last.levels; }
+		}
 		// the game keeps the views too: it may be showing the real battlefield (v0.18.0)
 		if (this.mSQHandle !== null) SQ.call(this.mSQHandle, 'onMessage', _msg);
 		// a battle we left (main menu, load) keeps sending views: don't bring the panel back
 		if (p.battleID === this.mBattleClosedID) return true;
-		if (this.mMirror && !this.mMirrorFallback) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
-		if (this.mMirror && p.turn === null)
-		{
-			// fallback: the panel is only for our turns, the battlefield shows the rest
-			this.mBattle = { host: _msg.from, view: p, skill: null };
-			if (this.mBattlePanel) this.setBattleHidden(true);
-			return true;
-		}
+		// the real battlefield is the control field: no panel (the game shows an action strip if needed)
+		if (this.mMirror) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; }
+		if (p.map && p.map.terrain === undefined) { this.mBattle = { host: _msg.from, view: p, skill: null }; return true; } // can't draw it yet
 		this.showBattleView(_msg.from, p);
 		return true;
 	}
@@ -405,14 +483,74 @@ BBCoopConnection.prototype.setBattleHidden = function (_hidden)
 	this.mBattleReopen.css('display', _hidden ? 'block' : 'none');
 };
 
-// Squirrel: the real battlefield is up (on), or can't take our turns (fallback: panel on our turns)
+// Squirrel: the real battlefield is up (on) or gone (off)
 BBCoopConnection.prototype.setBattleMirror = function (_data)
 {
 	this.mMirror = _data.on === true;
-	this.mMirrorFallback = _data.fallback === true;
-	if (this.mMirror && !this.mMirrorFallback) { this.removeBattlePanel(); return; }
-	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && (!this.mMirror || this.mBattle.view.turn !== null))
+	if (this.mMirror) { this.removeBattlePanel(); return; }
+	this.setMirrorTurn(null);
+	if (this.mBattle && this.mBattle.view && this.mBattle.view.battleID !== this.mBattleClosedID && this.mBattle.view.map && this.mBattle.view.map.terrain !== undefined)
 		this.showBattleView(this.mBattle.host, this.mBattle.view);
+};
+
+// Turn notice in a shared battle (Aaron's ask): top right, "It's your turn" on the screen of the
+// player whose brother acts, "<name>'s turn" for the host while a friend's brother acts
+BBCoopConnection.prototype.setTurnNotice = function (_text)
+{
+	if (!_text)
+	{
+		if (this.mTurnNotice) { this.mTurnNotice.remove(); this.mTurnNotice = null; }
+		return;
+	}
+	if (!this.mTurnNotice)
+	{
+		this.mTurnNotice = $('<div class="text-font-normal"/>').css({
+			position: 'fixed', right: '1.5rem', top: '7.5rem', 'z-index': 99000, 'pointer-events': 'none',
+			background: 'rgba(10, 8, 5, 0.9)', border: '0.15rem solid #c8a040', padding: '0.6rem 1.4rem',
+			color: '#f0d060', 'font-size': '1.8rem', 'text-align': 'center'
+		}).appendTo($('body'));
+	}
+	this.mTurnNotice.text(_text);
+};
+
+// Action strip in the real battlefield: our brother's skills, wait and end turn. Shown only on our
+// turns while the game's turn bar shows someone else (otherwise its own skill bar is there).
+// Targets are picked by clicking the map.
+BBCoopConnection.prototype.setMirrorTurn = function (_data)
+{
+	var self = this;
+	if (this.mMirrorStrip) { this.mMirrorStrip.remove(); this.mMirrorStrip = null; }
+	if (!_data || !_data.turn) return;
+	var turn = _data.turn;
+	var strip = $('<div class="text-font-normal"/>').css({
+		position: 'fixed', left: '50%', bottom: '14rem', transform: 'translateX(-50%)', 'z-index': 99000,
+		background: 'rgba(10, 8, 5, 0.9)', border: '0.1rem solid #8a6d3b', padding: '0.6rem 1rem', color: '#e8dcc0',
+		'font-size': '1.4rem', 'text-align': 'center', 'max-width': '90%'
+	}).appendTo($('body'));
+	$('<div/>').text('Your turn: ' + turn.name + ' (' + turn.ap + ' AP, fatigue ' + turn.fatigue + ' / ' + turn.fatigueMax + ')' +
+		(_data.busy ? ' - waiting for the host...' : ' - click a tile twice to move, or pick a skill and click a target')).css('margin-bottom', '0.4rem').appendTo(strip);
+	var button = function (_label, _enabled, _selected, _onClick)
+	{
+		var b = $('<span/>').text(_label).css({
+			display: 'inline-block', padding: '0.3rem 0.6rem', margin: '0.2rem', border: '0.1rem solid ' + (_selected ? '#f0d060' : '#8a6d3b'),
+			background: _selected ? 'rgba(240,208,96,0.2)' : 'rgba(255,255,255,0.05)', color: _enabled ? '#e8dcc0' : '#777', cursor: _enabled ? 'pointer' : 'default'
+		});
+		if (_enabled) b.click(_onClick);
+		return b.appendTo(strip);
+	};
+	for (var i = 0; i < turn.skills.length; i++)
+	{
+		(function (_skill)
+		{
+			button(_skill.name + ' (' + _skill.ap + ')', _skill.usable && !_data.busy, _data.selected === _skill.id, function ()
+			{
+				SQ.call(self.mSQHandle, 'mirrorSkill', _skill.id);
+			});
+		})(turn.skills[i]);
+	}
+	button('Wait', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'wait'); });
+	button('End turn', !_data.busy, false, function () { SQ.call(self.mSQHandle, 'mirrorOrder', 'end'); });
+	this.mMirrorStrip = strip;
 };
 
 // Takes the panel off the screen but remembers the battle
@@ -425,6 +563,7 @@ BBCoopConnection.prototype.removeBattlePanel = function ()
 BBCoopConnection.prototype.closeBattlePanel = function ()
 {
 	if (this.mBattle && this.mBattle.view) this.mBattleClosedID = this.mBattle.view.battleID;
+	this.setMirrorTurn(null);
 	if (this.mBattlePanel) { this.mBattlePanel.remove(); this.mBattleReopen.remove(); }
 	this.mBattlePanel = null;
 	this.mBattle = null;
@@ -1005,7 +1144,11 @@ BBCoopConnection.prototype.requestSession = function ()
 {
 	var self = this;
 	this.setJoinStatus('Connected. Asking the host for its world...', false);
-	this.send({ type: 'session_request', payload: {} });
+	// straight to the relay, not behind other queued sends (v0.45.0)
+	this.request('POST', '/send', { from: this.mConfig.playerName, type: 'session_request', payload: {} }, function (_status)
+	{
+		if (_status !== 200 && self.mJoinWaiting) self.setJoinStatus('Could not ask the host (status ' + _status + '). Try again.', true);
+	});
 	if (this.mJoinTimer) clearTimeout(this.mJoinTimer);
 	this.mJoinTimer = setTimeout(function ()
 	{
@@ -1034,6 +1177,10 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 	this.rememberHost(this.mConfig.relayURL, _from);
 	window.BBCoopPendingJoin = { host: _from, seed: _info.seed, x: _info.x, y: _info.y };
 	if (typeof _info.cd === 'number' && typeof _info.ed === 'number') { window.BBCoopPendingJoin.cd = _info.cd; window.BBCoopPendingJoin.ed = _info.ed; }
+	if (typeof _info.im === 'boolean') window.BBCoopPendingJoin.im = _info.im;
+	if (typeof _info.pd === 'boolean') window.BBCoopPendingJoin.pd = _info.pd;
+	if (typeof _info.ex === 'boolean') window.BBCoopPendingJoin.ex = _info.ex;
+	if (typeof _info.ge === 'number') window.BBCoopPendingJoin.ge = _info.ge;
 	this.showToast('Joining ' + _from + "'s campaign" + (_info.day ? ' (day ' + _info.day + ')' : '') + ". Pick your origin; the map, difficulty and day are set to theirs.");
 	SQ.call(this.mSQHandle, 'startJoin', window.BBCoopPendingJoin);
 };
@@ -1095,13 +1242,77 @@ BBCoopConnection.prototype.onSessionInfo = function (_from, _info)
 				this.mSeed.setInputText(pending.seed);
 				this.mSeed.attr('readonly', 'readonly');
 			}
+			if (pending)
+			{
+				try { this.bbcoopLockSettings(pending); }
+				catch (e) { console.error('BBCoop: could not lock the campaign settings: ' + e); }
+			}
 		};
 		var hide = NewCampaignMenuModule.prototype.hide;
 		NewCampaignMenuModule.prototype.hide = function ()
 		{
 			window.BBCoopPendingJoin = null;
 			if (this.mSeed) this.mSeed.removeAttr('readonly');
+			try { this.bbcoopUnlockSettings(); } catch (e) {}
 			return hide.apply(this, arguments);
+		};
+
+		// v0.30.0: a joiner picks only origin, company name and banner. Everything else shows the
+		// host's campaign settings, greyed out (the game forces them too, whatever is sent).
+		NewCampaignMenuModule.prototype.bbcoopLockable = function ()
+		{
+			return [this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox,
+				this.mEvilCrusadeCheckbox, this.mEvilPermanentDestructionCheckbox,
+				this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox,
+				this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox,
+				this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox,
+				this.mIronmanCheckbox, this.mExplorationCheckbox];
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopLockSettings = function (_pending)
+		{
+			var check = function (_box, _on) { if (_box) _box.iCheck(_on ? 'check' : 'uncheck'); };
+			var pick = function (_list, _index) { if (typeof _index === 'number' && _list[_index]) _list[_index].iCheck('check'); };
+			pick([this.mDifficultyEasyCheckbox, this.mDifficultyNormalCheckbox, this.mDifficultyHardCheckbox], _pending.cd);
+			pick([this.mEconomicDifficultyEasyCheckbox, this.mEconomicDifficultyNormalCheckbox, this.mEconomicDifficultyHardCheckbox], _pending.ed);
+			// starting funds aren't kept in a save, so joiners all start on Medium
+			pick([this.mBudgetDifficultyEasyCheckbox, this.mBudgetDifficultyNormalCheckbox, this.mBudgetDifficultyHardCheckbox], 1);
+			pick([this.mEvilRandomCheckbox, this.mEvilWarCheckbox, this.mEvilGreenskinsCheckbox, this.mEvilUndeadCheckbox, this.mEvilCrusadeCheckbox], _pending.ge);
+			if (typeof _pending.im === 'boolean') check(this.mIronmanCheckbox, _pending.im);
+			if (typeof _pending.ex === 'boolean') check(this.mExplorationCheckbox, _pending.ex);
+			if (typeof _pending.pd === 'boolean') check(this.mEvilPermanentDestructionCheckbox, _pending.pd);
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('disable');
+			var text = 'Campaign settings come from ' + _pending.host + "'s world and can't be changed.";
+			if (!this.mBBCoopNote)
+			{
+				this.mBBCoopNote = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mDifficultySelectionPanel.prepend(this.mBBCoopNote);
+				this.mBBCoopNote2 = $('<div class="text-font-normal font-color-subtitle"/>').css({ 'text-align': 'center', margin: '0.5rem 1rem' });
+				this.mCompanyCrisisSelectionPanel.prepend(this.mBBCoopNote2);
+			}
+			this.mBBCoopNote.text(text).show();
+			this.mBBCoopNote2.text('Pick your company name and banner. ' + text).show();
+		};
+
+		NewCampaignMenuModule.prototype.bbcoopUnlockSettings = function ()
+		{
+			var boxes = this.bbcoopLockable();
+			for (var i = 0; i < boxes.length; i++) if (boxes[i]) boxes[i].iCheck('enable');
+			if (this.mBBCoopNote) { this.mBBCoopNote.hide(); this.mBBCoopNote2.hide(); }
+		};
+
+		// leaving the screen without starting: the join is off
+		var cancel = NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed;
+		NewCampaignMenuModule.prototype.notifyBackendCancelButtonPressed = function ()
+		{
+			try
+			{
+				var screen = window.BBCoopScreen;
+				if (window.BBCoopPendingJoin && screen && screen.mSQHandle) SQ.call(screen.mSQHandle, 'cancelJoin', null);
+			}
+			catch (e) {}
+			return cancel.apply(this, arguments);
 		};
 	}
 })();

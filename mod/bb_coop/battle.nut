@@ -15,6 +15,13 @@
 	JoinedOwners = {},      // owner name -> true
 	MirrorOwners = {},      // owner name -> { sent = { entity id -> true } }: they see the real battlefield
 	PlayerOrigins = {},     // player name -> origin id, sent by the relay's test bot
+	// Join window (Aaron's design, v0.30.0): before round 1 the battle waits up to GatherSeconds for
+	// the other players to join, so their brothers start next to ours and act from round 1
+	GatherSeconds = 20.0,
+	GatherUntil = 0.0,      // > 0 while waiting
+	GatherPlayers = [],     // online players asked
+	GatherAnswered = {},    // player -> true once they joined or said no
+	FirstRoundHeld = false, // vanilla's first initNextRound, put off until the window closes
 
 	// ---- ally side ----
 	Invite = null,          // { host, battleID, time } offer we can accept with the keybind
@@ -38,6 +45,7 @@
 
 		this.HostBattleID = ::BBCoop.getSetting("PlayerName") + "_" + ::Time.getRealTime();
 		this.Reinforcements.clear();
+		this.LateJoins.clear();
 		this.JoinedOwners.clear();
 		this.MirrorOwners.clear();
 		::BBCoop.Remote.reset();
@@ -52,12 +60,69 @@
 		catch (error) {}
 
 		local payload = { battleID = this.HostBattleID, pos = pos, clan = ::BBCoop.getClan(), enemies = this.getEnemyNames() };
+		this.GatherUntil = 0.0;
+		this.GatherAnswered.clear();
+		this.FirstRoundHeld = false;
+		this.GatherPlayers = this.getOnlineOthers();
+		if (this.GatherPlayers.len() != 0)
+		{
+			this.GatherUntil = ::Time.getRealTimeF() + this.GatherSeconds;
+			payload.gather <- this.GatherSeconds.tointeger();
+			::BBCoop.notify(format("Waiting up to %i seconds for nearby players to join before the battle starts.", this.GatherSeconds.tointeger()));
+		}
 		// The relay's test bot can't make brothers itself, so our game rolls a fresh company for it
 		if (::BBCoop.Connection.isBotEnabled())
 			payload.company <- ::BBCoop.Roster.rollCompany("Bot" in this.PlayerOrigins ? this.PlayerOrigins["Bot"] : "mercenaries");
 
 		::BBCoop.Connection.sendMessage("battle_start", payload);
 		::BBCoop.log("Battle started, told other players (" + this.HostBattleID + ")");
+	}
+
+	function getOnlineOthers()
+	{
+		local me = ::BBCoop.getSetting("PlayerName");
+		local ret = [];
+		foreach (name, time in ::BBCoop.Seen)
+			if (name != me && ::BBCoop.isOnline(name, 15.0)) ret.push(name);
+		return ret;
+	}
+
+	function isGathering()
+	{
+		return this.GatherUntil > 0.0;
+	}
+
+	// Every frame of our battle before round 1 while the join window is open. True: hold the battle.
+	function updateGather( _state )
+	{
+		if (this.GatherUntil <= 0.0) return false;
+		local now = ::Time.getRealTimeF();
+		local waiting = 0;
+		foreach (p in this.GatherPlayers)
+			if (!(p in this.GatherAnswered) && ::BBCoop.isOnline(p, 15.0)) waiting++;
+		if (this.HostBattleID == null || waiting == 0 || now >= this.GatherUntil)
+		{
+			this.GatherUntil = 0.0;
+			local joined = this.JoinedOwners.len();
+			::BBCoop.notify(joined != 0 ? "Everyone is here. The battle begins!" : "Nobody joined in time. The battle begins.");
+			::BBCoop.log(format("Join window closed: %i joined, %i still undecided", joined, waiting));
+			if (this.FirstRoundHeld)
+			{
+				this.FirstRoundHeld = false;
+				::Tactical.TurnSequenceBar.initNextRound();
+			}
+			return false;
+		}
+		_state.setInputLocked(true);
+		try { if (::LoadingScreen.isVisible() && !::LoadingScreen.isAnimating()) ::LoadingScreen.hide(); } catch (error) {}
+		return true;
+	}
+
+	function onDecline( _from, _payload )
+	{
+		if (this.HostBattleID == null || _payload.battleID != this.HostBattleID) return;
+		this.GatherAnswered[_from] <- true;
+		if (this.isGathering()) ::BBCoop.log(_from + " is not joining the battle");
 	}
 
 	// Names of the enemy parties, for the join prompt ("fighting Brigand Raiders")
@@ -83,15 +148,55 @@
 		}
 		if (_from in this.JoinedOwners) return;
 		this.JoinedOwners[_from] <- true;
+		this.GatherAnswered[_from] <- true;
 
 		local side = ("side" in _payload) && _payload.side == "enemy" ? "enemy" : "ally";
-		local spawned = this.spawnReinforcements(_from, _payload.bros, side);
-		// v0.18.0 joiners build a copy of our battlefield and watch it there
+		// joiners build a copy of our battlefield and watch it there
 		if (("mirror" in _payload) && _payload.mirror)
 		{
 			this.MirrorOwners[_from] <- { sent = {} };
 			if (!::BBCoop.Mirror.sendScene(_from)) delete this.MirrorOwners[_from];
 		}
+		// Aaron's rule: in the join window they line up with their side; after it they arrive at the
+		// map edge when the current round ends
+		if (!this.isGathering() && this.hasRoundStarted())
+		{
+			this.LateJoins.push({ owner = _from, bros = _payload.bros, side = side });
+			::BBCoop.notify(format("%s joins the battle%s at the end of this round.", _from, side == "enemy" ? " AGAINST you" : ""));
+			::BBCoop.log(_from + " joins at the end of the round");
+			local now = null;
+			try { now = ::Tactical.TurnSequenceBar.getActiveEntity(); } catch (error) {}
+			::BBCoop.Remote.sendView(_from, now);
+			return;
+		}
+		this.bringIn(_from, _payload.bros, side);
+	}
+
+	LateJoins = [],         // { owner, bros, side } waiting for the end of the round
+
+	function hasRoundStarted()
+	{
+		local round = 0;
+		try { round = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
+		return round > 0;
+	}
+
+	// The end of a round (just before the next starts): late joiners arrive at the edge
+	function onRoundEnd()
+	{
+		if (this.HostBattleID == null || this.LateJoins.len() == 0) return;
+		local list = this.LateJoins;
+		this.LateJoins = [];
+		foreach (j in list)
+		{
+			try { this.bringIn(j.owner, j.bros, j.side); }
+			catch (error) { ::BBCoop.log("Could not bring in " + j.owner + "'s company: " + error); }
+		}
+	}
+
+	function bringIn( _from, _bros, side )
+	{
+		local spawned = this.spawnReinforcements(_from, _bros, side);
 		if (side == "enemy")
 			::BBCoop.notify(format("%s's company joins the battle AGAINST you (%i brothers)!", _from, spawned));
 		else
@@ -112,7 +217,9 @@
 	function spawnReinforcements( _owner, _bros, _side = "ally" )
 	{
 		local faction = _side == "enemy" ? this.getEnemyFaction() : ::Const.Faction.Player;
-		local tiles = this.findEdgeTiles(_bros.len(), faction);
+		// during the join window they line up next to their side; later they arrive at the map edge
+		local tiles = this.isGathering() ? this.findTilesNear(_bros.len(), faction) : this.findEdgeTiles(_bros.len(), faction);
+		if (tiles.len() < _bros.len()) tiles.extend(this.findEdgeTiles(_bros.len() - tiles.len(), faction));
 		local count = 0;
 		foreach (i, entry in _bros)
 		{
@@ -144,6 +251,52 @@
 			}
 		}
 		return count;
+	}
+
+	// Where a side stands: the middle of its units on the map
+	function getSideCentre( _faction )
+	{
+		local size = ::Tactical.getMapSize();
+		local group = [];
+		try
+		{
+			if (_faction == ::Const.Faction.Player) group = ::Tactical.Entities.getInstancesOfFaction(::Const.Faction.Player);
+			else group = ::Tactical.Entities.getAllHostilesAsArray();
+		}
+		catch (error) {}
+		local sumX = 0, sumY = 0, n = 0;
+		foreach (e in group)
+		{
+			if (e == null || !e.isPlacedOnMap()) continue;
+			local t = e.getTile();
+			sumX += t.SquareCoords.X;
+			sumY += t.SquareCoords.Y;
+			n++;
+		}
+		return n > 0 ? { x = sumX / n, y = sumY / n, n = n } : { x = size.X / 2, y = size.Y / 2, n = 0 };
+	}
+
+	// Free tiles around a side's units, closest first (rings outward from their middle)
+	function findTilesNear( _count, _faction = 1 )
+	{
+		local c = this.getSideCentre(_faction);
+		local ret = [];
+		for (local r = 1; r <= 14 && ret.len() < _count; r++)
+		{
+			for (local dx = -r; dx <= r && ret.len() < _count; dx++)
+			{
+				for (local dy = -r; dy <= r && ret.len() < _count; dy++)
+				{
+					if (dx != -r && dx != r && dy != -r && dy != r) continue; // only the ring itself
+					local x = c.x + dx, y = c.y + dy;
+					if (!::Tactical.isValidTileSquare(x, y)) continue;
+					local tile = ::Tactical.getTileSquare(x, y);
+					if (!tile.IsEmpty || tile.IsOccupiedByActor) continue;
+					ret.push(tile);
+				}
+			}
+		}
+		return ret;
 	}
 
 	// Free tiles along the map edge nearest to the side being joined
@@ -207,6 +360,10 @@
 		if (this.HostBattleID == null) return;
 		local battleID = this.HostBattleID;
 		this.HostBattleID = null;
+		try { ::BBCoop.Connection.setTurnNotice(null); } catch (error) {}
+		this.GatherUntil = 0.0;
+		this.FirstRoundHeld = false;
+		this.LateJoins.clear();
 		::BBCoop.Remote.reset();
 
 		local byOwner = {};
@@ -241,6 +398,12 @@
 
 		foreach (owner, results in byOwner)
 			::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = results, hostWon = hostWon });
+		// players who joined but whose brothers never arrived (late joiners waiting for the round's end)
+		foreach (owner, _ in this.JoinedOwners)
+		{
+			if (!(owner in byOwner))
+				::BBCoop.Connection.sendMessage("battle_result", { battleID = battleID, to = owner, bros = [], hostWon = hostWon, late = true });
+		}
 		::BBCoop.Connection.sendMessage("battle_over", { battleID = battleID });
 
 		// remove the visiting brothers from our game
@@ -258,6 +421,8 @@
 
 	PendingSide = "ally",
 	PendingBattleID = null,
+	OverAt = null,          // real time the host said the battle was over; results get a few seconds to arrive
+	OverGrace = 8.0,
 	HostTimeout = 60.0,     // no word from the host this long while away: our brothers come home
 	LocalEnemies = null,    // world parties we attacked ourselves before joining (removed if our side wins)
 	CombatArgs = null,      // vanilla combat dialog put on hold while the join prompt is open
@@ -283,31 +448,64 @@
 		return text;
 	}
 
+	// Tell the host we won't join, so its join window doesn't wait for us
+	function sendDecline( _host, _battleID )
+	{
+		::BBCoop.Connection.sendMessage("battle_decline", { to = _host, battleID = _battleID });
+	}
+
 	function onBattleStartMessage( _from, _payload )
 	{
-		if (this.isInTactical()) return; // busy with our own fight
-		if (this.PendingRefs != null) return; // already fighting elsewhere
-		if (_payload.pos == null) return;
-
-		local dist = 0.0;
-		try { dist = this.distanceTo(_payload.pos); } catch (error) { return; }
+		if (_payload.pos == null)
+		{
+			this.sendDecline(_from, _payload.battleID);
+			return;
+		}
 		local clan = ("clan" in _payload) ? _payload.clan : "";
 		this.Invite = {
 			host = _from, battleID = _payload.battleID, time = ::Time.getRealTimeF(), pos = _payload.pos, clan = clan,
-			enemies = ("enemies" in _payload) ? _payload.enemies : []
+			enemies = ("enemies" in _payload) ? _payload.enemies : [], asked = false
 		};
+		if (this.isInTactical() || this.PendingRefs != null)
+		{
+			// busy with our own fight, or already fighting elsewhere: the host's join window shouldn't
+			// wait for us, but the invite is kept, and offered once we are free (Aaron, v0.42.1)
+			this.sendDecline(_from, _payload.battleID);
+			::BBCoop.log(_from + " started a battle; you are asked to join once your own fight is over");
+			return;
+		}
+
+		local dist = 0.0;
+		try { dist = this.distanceTo(_payload.pos); } catch (error) { this.sendDecline(_from, _payload.battleID); return; }
 		if (dist > this.JoinRange)
 		{
 			::BBCoop.log(format("%s started a battle %.0f units away (join range %.0f)", _from, dist, this.JoinRange));
+			this.sendDecline(_from, _payload.battleID);
 			return;
 		}
-		this.showJoinPrompt(this.describeInvite(this.Invite) + " nearby.", false);
+		local text = this.describeInvite(this.Invite) + " nearby.";
+		if ("gather" in _payload)
+			text += format(" Join within %i seconds and your brothers start the battle next to theirs.", _payload.gather);
+		this.showJoinPrompt(text, false);
+	}
+
+	// Back on the world map (own battle over, or home from someone else's): a battle we were invited
+	// to while busy is offered now, if it is still going and still close
+	function offerKeptInvite()
+	{
+		if (this.Invite == null || this.Invite.asked || this.CombatArgs != null || this.PendingRefs != null || this.isInTactical()) return;
+		if (::Time.getRealTimeF() - this.Invite.time > 900.0) { this.Invite = null; return; }
+		local dist = 9999.0;
+		try { dist = this.distanceTo(this.Invite.pos); } catch (error) {}
+		if (dist > this.JoinRange) return; // Ctrl+B still works if they move closer
+		this.showJoinPrompt(this.describeInvite(this.Invite) + " nearby, still going.", false);
 	}
 
 	// Clanmates only get "join"; everyone else picks a side
 	function showJoinPrompt( _text, _fromEngage )
 	{
 		local invite = this.Invite;
+		invite.asked <- true;
 		local options = [];
 		if (this.isClanmate(invite.clan))
 		{
@@ -334,6 +532,8 @@
 			if (!this.acceptInvite(_choice)) this.LocalEnemies = null;
 			return;
 		}
+		if (this.Invite != null && (_choice == "no" || _choice == "own"))
+			this.sendDecline(this.Invite.host, this.Invite.battleID);
 		if (_choice == "own" && fromEngage)
 		{
 			local args = this.CombatArgs;
@@ -350,10 +550,13 @@
 		this.PendingRefs = null;
 		this.PendingHost = null;
 		this.PendingBattleID = null;
+		this.OverAt = null;
 		this.LocalEnemies = null;
+		::BBCoop.Mirror.Result = null; // a result kept for the world map no longer applies
 		::BBCoop.Connection.closeBattlePanel();
 		::BBCoop.Mirror.leave();
 		::BBCoop.notify(_reason + " Your brothers are back, unharmed.");
+		try { this.offerKeptInvite(); } catch (error) {}
 	}
 
 	function onLeaveWorld()
@@ -361,6 +564,7 @@
 		this.PendingRefs = null;
 		this.PendingHost = null;
 		this.PendingBattleID = null;
+		this.OverAt = null;
 		this.LocalEnemies = null;
 		this.Invite = null;
 		this.CombatArgs = null;
@@ -380,14 +584,37 @@
 		if (this.PendingRefs == null) return;
 		try { if (!::World.State.isPaused()) ::World.State.setPause(true); } catch (error) {}
 		if (!::BBCoop.isOnline(this.PendingHost, this.HostTimeout))
+		{
 			this.releaseAway("Lost contact with " + this.PendingHost + " during the battle.");
+			return;
+		}
+		// a result kept for the world map that the combat-finished hook did not apply (v0.43.0 fallback)
+		if (::BBCoop.Mirror.Result != null && !::BBCoop.Mirror.Active && ::BBCoop.Mirror.Scene == null && !this.isInTactical())
+		{
+			::BBCoop.Mirror.onBackInWorld();
+			return;
+		}
+		this.checkOver();
+	}
+
+	// The host said its battle is over. The result normally arrives first; when it doesn't (lost,
+	// or the two messages crossed), our brothers come home unharmed after a short wait. While we
+	// watch the copy of the battle the result waits for the world map (Mirror.Result): never
+	// release then, or that result would be thrown away (v0.42.0 fix).
+	function checkOver()
+	{
+		if (this.OverAt == null || this.PendingRefs == null) return;
+		if (::BBCoop.Mirror.Result != null) { this.OverAt = null; return; }
+		if (::Time.getRealTimeF() - this.OverAt < this.OverGrace) return;
+		this.releaseAway("No results arrived from " + this.PendingHost + "'s battle.");
 	}
 
 	function onBattleOver( _from, _payload )
 	{
-		// results come before this message; if none came, they are lost
 		if (this.PendingRefs != null && _from == this.PendingHost && _payload.battleID == this.PendingBattleID)
-			this.releaseAway("No results arrived from " + _from + "'s battle.");
+		{
+			if (::BBCoop.Mirror.Result == null && this.OverAt == null) this.OverAt = ::Time.getRealTimeF();
+		}
 
 		if (this.Invite != null && this.Invite.battleID == _payload.battleID)
 		{
@@ -481,8 +708,16 @@
 	{
 		if (this.PendingRefs == null) return;
 		if (_from != this.PendingHost) return;
+		if (("battleID" in _payload) && _payload.battleID != this.PendingBattleID) return;
 		// watching the copy of the battle: apply the result once we are back on the world map
 		if (::BBCoop.Mirror.keepResult(_from, _payload)) return;
+		this.OverAt = null;
+		if (("late" in _payload) && _payload.late)
+		{
+			// the battle ended before our company was brought in: nothing happened to anyone
+			this.releaseAway(format("%s's battle ended before your company arrived.", _from));
+			return;
+		}
 		local died = [], survived = 0;
 		foreach (entry in _payload.bros)
 		{
@@ -498,9 +733,10 @@
 			}
 			if (entry.raw == null) continue; // keep the original if packing failed
 
+			local bro = null;
 			try
 			{
-				local bro = ::World.getPlayerRoster().create("scripts/entity/tactical/player");
+				bro = ::World.getPlayerRoster().create("scripts/entity/tactical/player");
 				::BBCoop.Roster.deserializeInto(bro, entry.raw);
 				::BBCoop.Roster.copyAppearance(original, bro); // engine-saved sprites aren't in the data
 				::World.getPlayerRoster().remove(original);
@@ -508,7 +744,9 @@
 			}
 			catch (error)
 			{
-				::BBCoop.log("Could not apply result for " + entry.name + ": " + error);
+				::BBCoop.log("Could not apply result for " + entry.name + ": " + error + " (keeping him as he left)");
+				// the half-made copy must not stay next to the original
+				if (bro != null) try { ::World.getPlayerRoster().remove(bro); } catch (e2) {}
 			}
 		}
 		this.PendingRefs = null;
@@ -539,6 +777,14 @@
 		local text = format("The battle with %s is over, your side %s. %i of your brothers came back", _from, ourSideWon ? "won" : "lost", survived);
 		if (died.len() != 0) text += ". Fallen: " + died.reduce(@(a, b) a + ", " + b);
 		::BBCoop.notify(text + ".");
+		if (::World.getPlayerRoster().getSize() == 0)
+		{
+			// nobody came back: start over in this world, or leave (v0.43.0)
+			try { ::BBCoop.Company.onWipedOut(format("Every brother of yours fell in %s's battle.", _from)); }
+			catch (error) { ::BBCoop.log("Wipe-out prompt failed: " + error); }
+			return;
+		}
+		try { this.offerKeptInvite(); } catch (error) {}
 	}
 };
 
@@ -592,6 +838,28 @@
 	}
 });
 
+// The join window holds vanilla's first round until the other players had their chance to join
+::BBCoop.MH.hook("scripts/ui/screens/tactical/modules/turn_sequence_bar/turn_sequence_bar", function(q) {
+	q.initNextRound = @(__original) function( ... )
+	{
+		local copy = false;
+		try { copy = ::BBCoop.Mirror.Active; } catch (error) {}
+		if (::BBCoop.Battle.isGathering() && !copy)
+		{
+			::BBCoop.Battle.FirstRoundHeld = true;
+			return;
+		}
+		// before the new round's turn order is made, so late joiners act in it
+		if (!copy)
+		{
+			try { ::BBCoop.Battle.onRoundEnd(); } catch (error) { ::BBCoop.log("Late joiners: " + error); }
+		}
+		local args = [this];
+		args.extend(vargv);
+		return __original.acall(args);
+	}
+});
+
 // Attacking (or being attacked) right next to another player's battle offers to join it instead
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
 	q.showCombatDialog = @(__original) function( _isPlayerInitiated = true, _isCombatantsVisible = true, _allowFormationPicking = true, _properties = null, _pos = null )
@@ -610,12 +878,52 @@
 	}
 });
 
+// Vanilla's startCombat returns false when nobody is left to fight at the battle position (the
+// parties moved apart while the dialog was open), but loading_screen_onScreenShown then hides the
+// world map anyway and the loading screen stays up for good. Back to the map instead (v0.43.1).
+::BBCoop.Battle.CombatAborted <- false;
+::BBCoop.MH.hook("scripts/states/world_state", function(q) {
+	q.startCombat = @(__original) function( _pos )
+	{
+		local ok = __original(_pos);
+		if (ok == false)
+		{
+			::BBCoop.Battle.CombatAborted = true;
+			::BBCoop.log("No battle: nobody left to fight at the battle position.");
+		}
+		return ok;
+	}
+
+	q.loading_screen_onScreenShown = @(__original) function()
+	{
+		::BBCoop.Battle.CombatAborted = false;
+		__original();
+		if (!::BBCoop.Battle.CombatAborted) return;
+		::BBCoop.Battle.CombatAborted = false;
+		try
+		{
+			this.show();
+			::LoadingScreen.hide();
+			this.m.MenuStack.popAll(true);
+			::BBCoop.notify("The enemy is gone: there was nobody left to fight.");
+		}
+		catch (error) { ::BBCoop.log("Returning to the map after an empty battle failed: " + error); }
+	}
+});
+
 // Leaving the campaign (main menu, loading a save) ends any battle we were following
 ::BBCoop.MH.hook("scripts/states/world_state", function(q) {
 	q.onFinish = @(__original) function()
 	{
 		try { ::BBCoop.Battle.onLeaveWorld(); } catch (error) { ::BBCoop.log("onLeaveWorld failed: " + error); }
 		__original();
+	}
+
+	// our own battle is over: a battle we were invited to meanwhile is offered now
+	q.onCombatFinished = @(__original) function()
+	{
+		__original();
+		try { ::BBCoop.Battle.offerKeptInvite(); } catch (error) { ::BBCoop.log("Offering the kept invite failed: " + error); }
 	}
 });
 
