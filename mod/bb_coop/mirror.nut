@@ -1037,7 +1037,15 @@
 			try { togo = ::Tactical.TurnSequenceBar.getTurnsUntilActive(_target.getID()); } catch (error) {}
 			local copyRound = 0;
 			try { copyRound = ::Tactical.TurnSequenceBar.getCurrentRound(); } catch (error) {}
-			if (togo == null && (this.HostRound == null || copyRound >= this.HostRound)) return false;
+			if (togo == null && (this.HostRound == null || copyRound >= this.HostRound))
+			{
+				// v0.47.0: the copy's own initiative order differs from the host's, so it may have
+				// cycled past the host's active unit already this round (Aaron's Halsten went first in
+				// the copy, a Brigand Thug first on Touko's host): put him back into the bar, next
+				// in line, instead of waiting for a round that never comes
+				if (this.HostRound == null || copyRound == this.HostRound) this.pullIntoBar(_target);
+				return false;
+			}
 		}
 		local moved = activeID != this.LastActiveID;
 		if (!moved && _now - this.LastCycle < 2.0) return false; // still animating
@@ -1049,6 +1057,30 @@
 		try { ::Tactical.TurnSequenceBar.initNextTurn(); } catch (error) { ::BBCoop.log("Turn bar: " + error); }
 		this.Advancing = false;
 		return false;
+	}
+
+	// Puts a unit that already had his turn in the copy's round back into the bar, right behind the
+	// active unit (vanilla moveEntityToFront only reorders units still waiting). The bar's normal
+	// cycling then reaches him on the next step.
+	PulledFor = null,
+	function pullIntoBar( _e )
+	{
+		local bar = ::Tactical.TurnSequenceBar;
+		if (bar.m.IsLocked || bar.m.CurrentEntities.len() == 0) return;
+		if (!_e.isAlive() || !_e.isPlacedOnMap()) return;
+		local key = _e.getID() + "@" + bar.getCurrentRound();
+		if (this.PulledFor == key) return; // once per unit and round
+		this.PulledFor = key;
+		if (bar.getTurnsUntilActive(_e.getID()) != null) return;
+		bar.m.CurrentEntities.insert(1, _e);
+		try { bar.m.JSHandle.call("insertEntity", { id = _e.getID(), index = 1 }); } catch (error) {}
+		if (bar.m.CurrentEntities.len() > bar.m.MaxVisibleEntities)
+		{
+			local last = ::Math.min(bar.m.CurrentEntities.len(), bar.m.MaxVisibleEntities);
+			try { bar.m.JSHandle.asyncCall("removeEntity", bar.m.CurrentEntities[last].getID()); } catch (error) {}
+		}
+		this.CycleTries = 0;
+		::BBCoop.log("Turn bar: put " + _e.getName() + " back in line; the copy had moved past him");
 	}
 
 	// The small action strip (skills, wait, end turn) for our turns while the turn bar shows
@@ -1362,6 +1394,7 @@
 		this.SpawnData.clear();
 		this.LastApplied = null;
 		this.LastUnits.clear();
+		this.PulledFor = null;
 		this.HostRound = null;
 		this.View = null;
 		this.StripKey = null;
