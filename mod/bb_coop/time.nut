@@ -32,15 +32,17 @@
 	BusyTimeout = 12.0,     // host: a player counts as fighting this long after their last "busy"
 	SnapRunning = 2.0,      // drift (world seconds) allowed while our world runs
 	SnapPaused = 1.0,       // drift allowed while it is paused (the clock only moves forward then)
-	CalendarSlack = 6.0,    // calendar drift (world seconds) left alone
+	CalendarSlack = 6.0,    // calendar drift (world seconds) that starts a catch-up
+	CalendarDone = 2.0,     // a catch-up ends once the drift is this small
 	CatchUpMax = 8.0,       // fastest speed factor while behind the session's calendar
-	CatchUpMin = 0.1,       // slowest while ahead of it
+	CatchUpMin = 0.25,      // slowest while ahead of it
 	CatchUpCheck = 15.0,    // real seconds between progress checks of a catch-up
-	// v0.49.3: off. Aaron's and Touko's v0.49.2 logs show the calendar does not run at the speed
-	// set here (Touko's ran about 1x while the world was set to 4x) and the host's ran ahead while
-	// set to 0.1x, so the catch-up only made worlds oscillate. The clock test (Ctrl+Shift+T) finds
-	// out what does move the calendar.
-	CatchUpEnabled = false,
+	// v0.49.4: Aaron's clock test showed the calendar runs only with the world speed (jumps of
+	// the virtual time never move it). The catch-up now sets vanilla's own speed too
+	// (LastWorldSpeedMult, and MinWorldSpeedMult when slowing, which vanilla clamps to every
+	// frame), so the calendar really runs at it, and gives the player's choice back afterwards.
+	CatchUpEnabled = true,
+	Hold = null,            // { Player, Min, Written, WrittenMin } while the catch-up holds vanilla's speed
 	Probe = null,           // the clock test while it runs
 
 	// host
@@ -74,6 +76,7 @@
 		this.CatchOffUntil = -1.0;
 		this.CatchStarts = [];
 		this.Probe = null;
+		this.Hold = null;
 		this.PausedByHost = false;
 		this.SentSpeed = -1.0;
 	}
@@ -118,7 +121,8 @@
 	function getHostSpeed()
 	{
 		local speed = null;
-		try { speed = ::World.State.getLastWorldSpeedMult(); } catch (error) {}
+		if (this.Hold != null) speed = this.Hold.Player; // the catch-up holds vanilla's speed: the player's own choice
+		else try { speed = ::World.State.getLastWorldSpeedMult(); } catch (error) {}
 		if (speed == null || speed <= 0) speed = this.normalSpeed();
 		return ::Math.maxf(this.normalSpeed(), ::Math.minf(speed, ::Const.World.SpeedSettings.VeryFastMult));
 	}
@@ -299,7 +303,7 @@
 		}
 		local drift = target - cal;
 		local size = drift < 0 ? -drift : drift;
-		if (size <= this.CalendarSlack)
+		if (size <= (this.Catch != null ? this.CalendarDone : this.CalendarSlack))
 		{
 			if (this.Catch != null)
 			{
@@ -340,7 +344,7 @@
 			this.Catch.Since = _now;
 			this.Catch.Drift = size;
 		}
-		local f = 1.0 + drift / 10.0;
+		local f = 1.0 + drift / 15.0;
 		if (f > this.CatchUpMax) f = this.CatchUpMax;
 		if (f < this.CatchUpMin) f = this.CatchUpMin;
 		return f;
@@ -481,6 +485,47 @@
 		this.AutoPausedSince = null;
 	}
 
+	// Runs the world at _speed, vanilla's own speed included (see CatchUpEnabled)
+	function holdSpeed( _speed )
+	{
+		local m = ::World.State.m;
+		if (this.Hold == null) this.Hold = { Player = m.LastWorldSpeedMult, Min = m.MinWorldSpeedMult, Written = null, WrittenMin = null };
+		else
+		{
+			// the player pressed a speed button, or an escort set its own minimum, meanwhile
+			if (this.Hold.Written != null && m.LastWorldSpeedMult != this.Hold.Written) this.Hold.Player = m.LastWorldSpeedMult;
+			if (m.MinWorldSpeedMult != (this.Hold.WrittenMin != null ? this.Hold.WrittenMin : this.Hold.Min)) this.Hold.Min = m.MinWorldSpeedMult;
+		}
+		m.LastWorldSpeedMult = _speed;
+		this.Hold.Written = _speed;
+		if (this.Hold.Min != null && _speed < this.Hold.Min)
+		{
+			m.MinWorldSpeedMult = _speed;
+			this.Hold.WrittenMin = _speed;
+		}
+		else
+		{
+			m.MinWorldSpeedMult = this.Hold.Min;
+			this.Hold.WrittenMin = null;
+		}
+		::World.setSpeedMult(_speed);
+	}
+
+	// Gives vanilla's speed back to the player's choice
+	function releaseSpeed()
+	{
+		if (this.Hold == null) return;
+		local h = this.Hold;
+		this.Hold = null;
+		try
+		{
+			local m = ::World.State.m;
+			if (h.Written != null && m.LastWorldSpeedMult == h.Written) m.LastWorldSpeedMult = h.Player;
+			if (h.WrittenMin == null || m.MinWorldSpeedMult == h.WrittenMin) m.MinWorldSpeedMult = h.Min;
+		}
+		catch (error) {}
+	}
+
 	// ================= clock test (v0.49.3) =================
 	// Ctrl+Shift+T on the world map: a 20-second test of what moves the game's calendar (the day
 	// and hour it shows), written to the log. It moves your world about half a day ahead.
@@ -562,9 +607,17 @@
 		if (::World.State.isPaused())
 		{
 			this.Catch = null; // a paused world can't catch up; start counting again when it runs
+			this.releaseSpeed();
 			return;
 		}
-		try { speed *= this.getCatchUp(now); } catch (error) { ::BBCoop.log("Calendar catch-up failed: " + error); this.CatchOffUntil = now + 300.0; }
+		local f = 1.0;
+		try { f = this.getCatchUp(now); } catch (error) { ::BBCoop.log("Calendar catch-up failed: " + error); this.CatchOffUntil = now + 300.0; }
+		if (f != 1.0)
+		{
+			this.holdSpeed(speed * f);
+			return;
+		}
+		this.releaseSpeed();
 		if (::World.getSpeedMult() != speed) ::World.setSpeedMult(speed);
 	}
 };
